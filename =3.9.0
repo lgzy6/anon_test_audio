@@ -1,7 +1,0 @@
-Looking in indexes: http://mirrors.aliyun.com/pypi/simple
-Collecting h5py
-  Downloading http://mirrors.aliyun.com/pypi/packages/05/8a/63f4b08f3628171ce8da1a04681a65ee7ac338fde3cb3e9e3c9f7818e4da/h5py-3.15.1-cp310-cp310-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl (4.7 MB)
-     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.7/4.7 MB 54.8 MB/s  0:00:00
-Requirement already satisfied: numpy>=1.21.2 in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from h5py) (1.24.3)
-Installing collected packages: h5py
-Successfully installed h5py-3.15.1

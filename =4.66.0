@@ -1,5 +1,0 @@
-Looking in indexes: http://mirrors.aliyun.com/pypi/simple
-Collecting tqdm
-  Downloading http://mirrors.aliyun.com/pypi/packages/d0/30/dc54f88dd4a2b5dc8a0279bdd7270e735851848b762aeb1c1184ed1f6b14/tqdm-4.67.1-py3-none-any.whl (78 kB)
-Installing collected packages: tqdm
-Successfully installed tqdm-4.67.1

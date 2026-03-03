@@ -1,7 +1,0 @@
-Looking in indexes: http://mirrors.aliyun.com/pypi/simple
-Collecting scipy
-  Downloading http://mirrors.aliyun.com/pypi/packages/8e/6d/41991e503e51fc1134502694c5fa7a1671501a17ffa12716a4a9151af3df/scipy-1.15.3-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (37.7 MB)
-     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 37.7/37.7 MB 83.2 MB/s  0:00:00
-Requirement already satisfied: numpy<2.5,>=1.23.5 in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from scipy) (1.24.3)
-Installing collected packages: scipy
-Successfully installed scipy-1.15.3
