@@ -1,0 +1,148 @@
+# configs/prototype_pool.yaml
+# =============================================================================
+# SAMM-Anon Speaker Prototype Pool Configuration
+# =============================================================================
+# 研究导向优化配置 - 从 Frame-level Pool 转向 Speaker Prototype Pool
+#
+# 核心思想:
+# - 每个说话人用 K 个 prototype 代替全部帧
+# - 压缩比: 55M -> 100K (550x)
+# - 构建时间: 6h -> 10min
+#
+# 理论依据:
+# 1. 同一说话人的帧高度相似 (冗余)
+# 2. 匿名化需要的是说话人多样性，不是帧密度
+# 3. 每个说话人用 K 个 prototype 即可覆盖其 timbre manifold
+
+# -----------------------------------------------------------------------------
+# 路径配置
+# -----------------------------------------------------------------------------
+paths:
+  librispeech_root: "/root/autodl-tmp/datasets/LibriTTS"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+  wavlm_checkpoint: "/root/autodl-tmp/anon_test/checkpoints/WavLM-Large.pt"
+  cache_dir: "/root/autodl-tmp/anon_test/data/samm_anon/cache"
+  checkpoints_dir: "/root/autodl-tmp/anon_test/data/samm_anon/checkpoints"
+  output_dir: "/root/autodl-tmp/anon_test/data/samm_anon/outputs"
+  log_dir: "/root/autodl-tmp/anon_test/data/samm_anon/logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 512
+  masking:
+    token_mask_ratio: 0.10
+    span_mask_ratio: 0.15
+    min_span: 3
+    max_span: 10
+    duration_noise_std: 0.15
+    duration_quant_step: 0.02
+    rhythm_window: 5
+    rhythm_shuffle_prob: 0.3
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k_neighbors: 4
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+
+phone_predictor:
+  checkpoint: "/root/autodl-tmp/anon_test/checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Offline 训练配置
+# -----------------------------------------------------------------------------
+offline:
+  train_split: "train-other-500"
+  batch_size: 32
+  num_workers: 16
+
+  # =========================================================================
+  # Step 1-5: 与 dual_4090.yaml 相同
+  # =========================================================================
+  feature_extraction:
+    max_utterances: null
+    save_interval: 500
+    use_fp16: true
+
+  subspace_learning:
+    min_utterances_per_speaker: 5
+    max_frames_per_speaker: 100000
+
+  feature_cleaning:
+    batch_size: 200000
+
+  codebook_training:
+    max_samples: 1000000
+    kmeans_batch_size: 8192
+    kmeans_max_iter: 50
+    num_segments: 20
+    sampling_method: "segmented"
+
+  pattern_learning:
+    smoothing_alpha: 0.1
+    device: cuda
+    gpu_batch: 500000
+
+  # =========================================================================
+  # Step 6: Speaker Prototype Pool (研究导向优化)
+  # =========================================================================
+  pool_building:
+    # ----- 运行模式 -----
+    use_prototype_version: true       # ★★★ 使用 Prototype Pool 版本
+    use_dual_gpu_version: false
+    use_robust_version: false
+    use_lowmem_version: false
+
+    # ----- GPU 配置 -----
+    use_gpu: true
+    gpu_id: 0
+
+    # ----- Prototype 配置 -----
+    prototype:
+      n_prototypes_per_speaker: 50    # 每个说话人 50 个 prototype
+      n_prototypes_per_phone: 8       # 每个音素 8 个 prototype (分层模式)
+      use_phone_stratified: true      # ★★★ 启用音素分层采样
+      min_frames_per_speaker: 100     # 说话人最少帧数阈值
+
+    # ----- FAISS 配置 (小规模 pool) -----
+    nlist: 256                        # IVF 聚类数 (100K pool 不需要太多)
+    nprobe: 32                        # 搜索时探测数
+
+    # ----- 子索引配置 -----
+    build_phone_indices: true
+    build_gender_indices: true
+    build_phone_clusters: true
+
+# -----------------------------------------------------------------------------
+# 计算资源配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0, 1]
+num_workers: 16
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100

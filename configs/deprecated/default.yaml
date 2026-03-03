@@ -1,0 +1,199 @@
+# configs/default.yaml
+# =============================================================================
+# SAMM-Anon Default Configuration
+# =============================================================================
+# 这是基础默认配置文件，包含所有参数的合理默认值
+# 其他配置文件可以继承此文件并覆盖特定参数
+
+# -----------------------------------------------------------------------------
+# 路径配置
+# -----------------------------------------------------------------------------
+paths:
+  # 数据集
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+
+  # 预训练模型
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+
+  # 缓存目录
+  cache_dir: "./cache"
+
+  # 模型存储
+  checkpoints_dir: "./checkpoints"
+
+  # 输出目录
+  output_dir: "./outputs"
+
+  # 日志目录
+  log_dir: "./logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置 (WavLM)
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  enabled: true                 # v2.1: 是否启用 Eta-WavLM 投影
+  speaker_subspace_dim: 64      # D_s: 说话人子空间维度
+
+samm:
+  codebook_size: 512          # K: codebook 大小
+  masking:
+    token_mask_ratio: 0.10    # 随机 token 掩码比例
+    span_mask_ratio: 0.15     # 连续片段掩码比例
+    min_span: 3
+    max_span: 10
+    duration_noise_std: 0.15
+    duration_quant_step: 0.02
+    rhythm_window: 5
+    rhythm_shuffle_prob: 0.3
+
+pattern:
+  smoothing_alpha: 0.1        # Pattern Matrix 平滑参数
+
+knn_vc:
+  k_neighbors: 4              # kNN 近邻数
+  num_clusters: 8             # 每个音素的聚类数
+  use_phone_constraint: true
+  use_gender_constraint: true
+  # v2.1 优化参数
+  use_top1: true              # 使用 Top-1 而非加权平均 (推荐)
+  use_cosine: true            # 使用余弦相似度而非 L2 距离 (推荐)
+
+phone_predictor:
+  checkpoint: "./checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Offline 训练配置
+# -----------------------------------------------------------------------------
+offline:
+  # 数据集选择
+  train_split: "train-clean-100"    # train-clean-100 / train-clean-360 / train-other-500
+
+  batch_size: 8
+  num_workers: 4
+
+  # =========================================================================
+  # Step 1: 特征提取 (WavLM)
+  # =========================================================================
+  feature_extraction:
+    max_utterances: null        # null = 处理全部
+    save_interval: 1000         # 每 N 个 utterance 保存进度 (断点续传)
+    use_fp16: false
+
+  # =========================================================================
+  # Step 2: 子空间学习 (Eta-WavLM)
+  # =========================================================================
+  subspace_learning:
+    min_utterances_per_speaker: 5
+    max_frames_per_speaker: 50000   # 每说话人最多采样帧数
+
+  # =========================================================================
+  # Step 3: 特征清洗 (去说话人)
+  # =========================================================================
+  feature_cleaning:
+    batch_size: 50000           # 每批处理帧数
+
+  # =========================================================================
+  # Step 4: Codebook 训练
+  # =========================================================================
+  codebook_training:
+    max_samples: 300000         # 训练样本数
+    kmeans_batch_size: 4096
+    kmeans_max_iter: 30
+    num_segments: 10            # 分段采样数
+    sampling_method: "segmented"  # segmented / uniform
+
+  # =========================================================================
+  # Step 5: Pattern Matrix 学习
+  # =========================================================================
+  pattern_learning:
+    smoothing_alpha: 0.1
+    device: cuda
+    gpu_batch: 200000
+
+  # =========================================================================
+  # Step 6: Target Pool 构建
+  # =========================================================================
+  pool_building:
+    # ----- 运行模式 -----
+    use_robust_version: true      # 使用 robust 版本 (支持断点续传)
+
+    # ----- IO 配置 -----
+    io_batch_size: 50000          # 磁盘读取批大小 (降低内存峰值)
+
+    # ----- GPU 配置 -----
+    gpu_id: 0
+    gpu_add_batch: 100000         # GPU 每批添加向量数 (关键: 防止 OOM)
+    use_gpu: true
+
+    # ----- FAISS IVF 配置 -----
+    nlist: 2048                   # IVF 聚类数
+    train_size: 200000            # 训练索引用的样本数
+    nprobe: 64                    # 搜索时探测的聚类数
+
+    # ----- 分片配置 (大规模数据) -----
+    shard_size: 5000000           # 每分片向量数 (500万)
+    use_sharding: false           # 数据量 < 1000万时关闭
+
+    # ----- 子索引配置 -----
+    min_samples_per_cluster: 100
+
+    # ----- Phone 索引 -----
+    build_phone_indices: true
+    phone_index_type: "auto"      # flat / ivf / auto
+    phone_ivf_nlist: 256
+
+    # ----- Gender 索引 -----
+    build_gender_indices: true
+    gender_ivf_nlist: 1024
+
+    # ----- Phone Clusters (pknnvc 格式) -----
+    build_phone_clusters: true
+
+    # =========================================================================
+    # Robust 版本特有配置 (断点续传 & 内存优化)
+    # =========================================================================
+    robust:
+      # ----- Checkpoint 配置 -----
+      enable_checkpointing: true    # 启用断点续传
+      checkpoint_interval: 100000   # 每处理 N 帧保存一次 checkpoint
+
+      # ----- 内存优化 -----
+      symbol_batch_size: 10000      # 符号分配批次大小
+
+      # ----- 内存监控 -----
+      memory_warning_threshold: 0.80    # 内存警告阈值 (80%)
+      memory_critical_threshold: 0.90   # 内存临界阈值 (90%)
+
+      # ----- 自动清理 -----
+      auto_gc_interval: 50000       # 每 N 帧执行一次 GC
+
+      # ----- 错误恢复 -----
+      max_retries: 3                # 最大重试次数
+      retry_delay: 5                # 重试延迟 (秒)
+
+# -----------------------------------------------------------------------------
+# 计算资源配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0]
+num_workers: 4
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100

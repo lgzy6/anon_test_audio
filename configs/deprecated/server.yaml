@@ -1,0 +1,196 @@
+# configs/server.yaml
+# =============================================================================
+# SAMM-Anon Server Configuration
+# =============================================================================
+# 服务器生产环境配置
+# 针对大规模数据集 (train-other-500) 优化
+# 重点: 内存安全、断点续传、高效处理
+
+# -----------------------------------------------------------------------------
+# 路径配置 (服务器绝对路径)
+# -----------------------------------------------------------------------------
+paths:
+  # 数据集
+  librispeech_root: "/root/autodl-tmp/datasets/LibriTTS"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+
+  # 预训练模型
+  wavlm_checkpoint: "/root/autodl-tmp/anon_test/checkpoints/WavLM-Large.pt"
+
+  # 缓存目录 (建议放在高速存储)
+  cache_dir: "/root/autodl-tmp/anon_test/data/samm_anon/cache"
+
+  # 模型存储
+  checkpoints_dir: "/root/autodl-tmp/anon_test/data/samm_anon/checkpoints"
+
+  # 输出目录
+  output_dir: "/root/autodl-tmp/anon_test/data/samm_anon/outputs"
+
+  # 日志目录
+  log_dir: "/root/autodl-tmp/anon_test/data/samm_anon/logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 512
+  masking:
+    token_mask_ratio: 0.10
+    span_mask_ratio: 0.15
+    min_span: 3
+    max_span: 10
+    duration_noise_std: 0.15
+    duration_quant_step: 0.02
+    rhythm_window: 5
+    rhythm_shuffle_prob: 0.3
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k_neighbors: 4
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+
+phone_predictor:
+  checkpoint: "/root/autodl-tmp/anon_test/checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Offline 训练配置 (服务器优化)
+# -----------------------------------------------------------------------------
+offline:
+  # 大规模数据集
+  train_split: "train-other-500"    # 或 "train-clean-360"
+
+  batch_size: 16                    # 根据 GPU 显存调整
+  num_workers: 8                    # 数据加载线程
+
+  # =========================================================================
+  # Step 1: 特征提取 (WavLM)
+  # =========================================================================
+  feature_extraction:
+    max_utterances: null
+    save_interval: 500              # 更频繁保存 (大数据集)
+    use_fp16: false
+
+  # =========================================================================
+  # Step 2: 子空间学习 (Eta-WavLM)
+  # =========================================================================
+  subspace_learning:
+    min_utterances_per_speaker: 5
+    max_frames_per_speaker: 50000
+
+  # =========================================================================
+  # Step 3: 特征清洗 (去说话人)
+  # =========================================================================
+  feature_cleaning:
+    batch_size: 50000
+
+  # =========================================================================
+  # Step 4: Codebook 训练
+  # =========================================================================
+  codebook_training:
+    max_samples: 500000             # 50万帧 (大数据集)
+    kmeans_batch_size: 4096
+    kmeans_max_iter: 50             # 更多迭代保证收敛
+    num_segments: 20
+    sampling_method: "segmented"
+
+  # =========================================================================
+  # Step 5: Pattern Matrix 学习
+  # =========================================================================
+  pattern_learning:
+    smoothing_alpha: 0.1
+    device: cuda
+    gpu_batch: 200000
+
+  # =========================================================================
+  # Step 6: Target Pool 构建 (关键优化)
+  # =========================================================================
+  pool_building:
+    # ----- 运行模式 -----
+    use_robust_version: true
+
+    # ----- IO 配置 (内存安全) -----
+    io_batch_size: 50000            # ★ 降低到 5万 (原 50万)
+
+    # ----- GPU 配置 (防止 OOM Kill) -----
+    gpu_id: 0
+    gpu_add_batch: 50000            # ★ 降低到 5万 (原 50万) - 关键参数
+    use_gpu: true
+
+    # ----- FAISS IVF 配置 -----
+    nlist: 2048
+    train_size: 200000              # 20万样本训练
+    nprobe: 64
+
+    # ----- 分片配置 -----
+    shard_size: 5000000
+    use_sharding: false             # train-other-500 约 3500万帧，可考虑开启
+
+    # ----- 子索引配置 -----
+    min_samples_per_cluster: 100
+
+    # ----- Phone 索引 -----
+    build_phone_indices: true
+    phone_index_type: "auto"
+    phone_ivf_nlist: 256
+
+    # ----- Gender 索引 -----
+    build_gender_indices: true
+    gender_ivf_nlist: 1024
+
+    # ----- Phone Clusters -----
+    build_phone_clusters: true
+
+    # =========================================================================
+    # Robust 版本配置 (断点续传 & 内存优化)
+    # =========================================================================
+    robust:
+      # ----- Checkpoint 配置 -----
+      enable_checkpointing: true    # ★ 启用断点续传
+      checkpoint_interval: 50000    # ★ 每 5万帧保存 (更频繁)
+
+      # ----- 内存优化 -----
+      symbol_batch_size: 5000       # ★ 符号分配批次 (更小)
+
+      # ----- 内存监控 (更保守) -----
+      memory_warning_threshold: 0.75    # ★ 75% 警告
+      memory_critical_threshold: 0.85   # ★ 85% 临界
+
+      # ----- 自动清理 -----
+      auto_gc_interval: 25000       # ★ 更频繁 GC
+
+      # ----- 错误恢复 -----
+      max_retries: 5                # 更多重试
+      retry_delay: 10               # 更长延迟
+
+# -----------------------------------------------------------------------------
+# 计算资源配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0]
+num_workers: 8
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100

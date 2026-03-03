@@ -1,0 +1,6 @@
+Looking in indexes: http://mirrors.aliyun.com/pypi/simple
+Collecting kaldiio
+  Downloading http://mirrors.aliyun.com/pypi/packages/ae/e3/6c3b42233225f398f7a72988b524f654ae818cca0d441db847a2761203e9/kaldiio-2.18.1-py3-none-any.whl (29 kB)
+Requirement already satisfied: numpy in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from kaldiio) (1.24.3)
+Installing collected packages: kaldiio
+Successfully installed kaldiio-2.18.1

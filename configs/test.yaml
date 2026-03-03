@@ -1,0 +1,130 @@
+# configs/test.yaml
+# =============================================================================
+# SAMM-Anon 测试配置 (v2.1)
+# =============================================================================
+# 适用于: 快速测试、调试、消融实验
+#
+# 测试模式:
+#   使用环境变量 TEST_PROFILE 选择测试配置:
+#   - TEST_PROFILE=no_eta      : 禁用 Eta-WavLM (验证特征空间匹配)
+#   - TEST_PROFILE=minimal     : 最小化配置 (禁用掩码、低层特征)
+#   - TEST_PROFILE=layer6      : 使用 Layer 6 (降低身份泄漏)
+#   - 默认                     : 标准测试配置
+#
+# 使用方法:
+#   TEST_PROFILE=no_eta python scripts/test_anonymization.py
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 路径配置
+# -----------------------------------------------------------------------------
+paths:
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+  cache_dir: "./cache"
+  checkpoints_dir: "./checkpoints"
+  output_dir: "./outputs"
+  log_dir: "./logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15                    # no_eta/minimal: 15, layer6: 6
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  enabled: true                # no_eta: false, minimal: true, layer6: true
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 512
+  masking:
+    token_mask_ratio: 0.10     # minimal: 0.0 (禁用掩码测试)
+    span_mask_ratio: 0.15      # minimal: 0.0 (禁用掩码测试)
+    min_span: 3
+    max_span: 10
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k_neighbors: 1               # 强制 Top-1 (所有测试模式)
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+  # v2.1 优化参数
+  use_top1: true               # ✓ 强制使用 Top-1
+  use_cosine: true             # ✓ 使用余弦相似度
+
+phone_predictor:
+  checkpoint: "./checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# 设备配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0]
+num_workers: 4
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100
+
+# =============================================================================
+# 测试模式说明
+# =============================================================================
+#
+# 1. TEST_PROFILE=no_eta (验证特征空间匹配问题)
+#    目的: 测试禁用 Eta-WavLM 后，是否能与 Target Pool 特征空间匹配
+#    修改:
+#      - eta_wavlm.enabled: false
+#      - ssl.layer: 15 (保持)
+#      - knn_vc.k_neighbors: 1 (Top-1)
+#    预期: 如果 WER 显著降低，说明问题在于特征空间不匹配
+#
+# 2. TEST_PROFILE=minimal (最小化配置)
+#    目的: 排除 SAMM 掩码的影响，测试基础流程
+#    修改:
+#      - eta_wavlm.enabled: true
+#      - samm.masking.token_mask_ratio: 0.0
+#      - samm.masking.span_mask_ratio: 0.0
+#      - ssl.layer: 6 (降低到 Layer 6)
+#    预期: 如果 WER 显著降低，说明问题在于 SAMM 掩码过于激进
+#
+# 3. TEST_PROFILE=layer6 (低层特征测试)
+#    目的: 使用更低层的特征减少身份泄漏
+#    修改:
+#      - ssl.layer: 6
+#      - eta_wavlm.enabled: true
+#      - samm.masking: 保持默认
+#    预期: 验证 Layer 6 vs Layer 15 的隐私-效用权衡
+#
+# =============================================================================
+# 配置文件使用示例
+# =============================================================================
+#
+# 方式 1: 使用环境变量 (推荐)
+#   TEST_PROFILE=no_eta python scripts/test_anonymization.py --config configs/test.yaml
+#
+# 方式 2: 直接修改本文件
+#   根据需要修改上面的参数，然后运行:
+#   python scripts/test_anonymization.py --config configs/test.yaml
+#
+# 方式 3: 消融测试
+#   python ablation_test.py --config configs/test.yaml
+#
+# =============================================================================

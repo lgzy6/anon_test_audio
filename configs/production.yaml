@@ -1,0 +1,228 @@
+# configs/production.yaml
+# =============================================================================
+# SAMM-Anon 生产环境配置 (v2.1)
+# =============================================================================
+# 适用于: 服务器环境、大规模数据集训练
+#
+# 硬件要求:
+#   - GPU: 单卡 24GB+ 或 双卡 RTX 4090
+#   - 内存: 128GB+ (推荐 240GB)
+#   - 存储: 高速 SSD
+#
+# 优化特性:
+#   - 断点续传 (防止训练中断)
+#   - 内存优化 (防止 OOM Kill)
+#   - 双 GPU 支持 (可选)
+#
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 路径配置 (服务器绝对路径)
+# -----------------------------------------------------------------------------
+paths:
+  # 数据集
+  librispeech_root: "/root/autodl-tmp/datasets/LibriTTS"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+
+  # 预训练模型
+  wavlm_checkpoint: "/root/autodl-tmp/anon_test/checkpoints/WavLM-Large.pt"
+
+  # 缓存与输出 (建议放在高速存储)
+  cache_dir: "/root/autodl-tmp/anon_test/data/samm_anon/cache"
+  checkpoints_dir: "/root/autodl-tmp/anon_test/data/samm_anon/checkpoints"
+  output_dir: "/root/autodl-tmp/anon_test/data/samm_anon/outputs"
+  log_dir: "/root/autodl-tmp/anon_test/data/samm_anon/logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 6
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置 (v2.1 优化)
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  enabled: true
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 512
+  masking:
+    token_mask_ratio: 0.10
+    span_mask_ratio: 0.15
+    min_span: 3
+    max_span: 10
+    duration_noise_std: 0.15
+    duration_quant_step: 0.02
+    rhythm_window: 5
+    rhythm_shuffle_prob: 0.3
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k: 4                           # kNN 近邻数
+  k_neighbors: 4                 # 兼容别名
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+  # v2.1 优化参数
+  use_top1: true
+  use_cosine: true
+
+phone_predictor:
+  checkpoint: "/root/autodl-tmp/anon_test/checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Offline 训练配置 (生产环境优化)
+# -----------------------------------------------------------------------------
+offline:
+  # 数据集选择 (120GB内存推荐用 train-clean-360)
+  train_split: "train-clean-360"    # ~1300万帧，内存友好
+
+  batch_size: 32                    # 双 GPU: 32
+  num_workers: 16                   # 双 GPU: 16 线程
+
+  # =========================================================================
+  # Step 1: 特征提取 (WavLM)
+  # =========================================================================
+  feature_extraction:
+    max_utterances: null
+    save_interval: 500              # 更频繁保存 (大数据集)
+    use_fp16: false                 # 双 GPU 可启用: true
+
+  # =========================================================================
+  # Step 2: 子空间学习 (Eta-WavLM)
+  # =========================================================================
+  subspace_learning:
+    min_utterances_per_speaker: 5
+    max_frames_per_speaker: 50000   # 双 GPU: 100000
+
+  # =========================================================================
+  # Step 3: 特征清洗 (去说话人)
+  # =========================================================================
+  feature_cleaning:
+    batch_size: 50000               # 双 GPU: 200000
+
+  # =========================================================================
+  # Step 4: Codebook 训练
+  # =========================================================================
+  codebook_training:
+    max_samples: 500000             # 50万帧 (大数据集), 双 GPU: 1000000
+    kmeans_batch_size: 4096         # 双 GPU: 8192
+    kmeans_max_iter: 50             # 更多迭代保证收敛
+    num_segments: 20
+    sampling_method: "segmented"
+
+  # =========================================================================
+  # Step 5: Pattern Matrix 学习
+  # =========================================================================
+  pattern_learning:
+    smoothing_alpha: 0.1
+    device: cuda
+    gpu_batch: 200000               # 双 GPU: 500000
+
+  # =========================================================================
+  # Step 6: Target Pool 构建 (关键优化)
+  # =========================================================================
+  pool_building:
+    # ----- 运行模式 -----
+    use_v3_version: false         # v3.0: Pattern 分区池
+    use_dual_gpu_version: false   # 双 GPU 并行 (需要 240GB+ 内存)
+    use_low_mem_version: false    # 低内存流式处理
+    use_sampled_version: true     # 采样构建 (推荐 120GB 内存) ✓
+
+    # ----- 采样参数 (use_sampled_version=true 时生效) -----
+    target_frames: 15000000       # 目标采样 1500万帧 (原 5500万)
+    sample_strategy: "stratified" # 分层采样，保持 phone/gender 分布
+
+    # ----- v3.0 Pattern 配置 -----
+    n_patterns: 8                 # Pattern 聚类数量
+    use_transition_matrix: true   # 使用转移矩阵作为 Pattern 特征
+
+    # ----- GPU 配置 -----
+    gpu_id: 0                       # 单 GPU
+    gpu_ids: [0, 1]                 # 双 GPU 配置
+    use_gpu: true
+
+    # ----- IO 配置 (低内存优化) -----
+    io_batch_size: 50000            # 降低到5万/批，大幅减少内存
+
+    # ----- GPU 批处理 (低内存优化) -----
+    gpu_add_batch: 100000           # 降低到10万/批
+
+    # ----- FAISS IVF 配置 (低内存优化) -----
+    nlist: 1024                     # 从4096降到1024，减少训练内存
+    train_size: 200000              # 从50万降到20万
+    nprobe: 64                      # 降低 nprobe
+
+    # ----- 子索引采样限制 (防止 OOM) -----
+    max_samples_per_phone: 500000   # 每个phone最多50万样本
+    max_samples_per_gender: 5000000 # 每个gender最多500万样本
+
+    # ----- 分片配置 -----
+    shard_size: 5000000             # 双 GPU: 10000000
+    use_sharding: false             # train-other-500 约 3500万帧，可考虑开启
+
+    # ----- 子索引配置 -----
+    min_samples_per_cluster: 100
+
+    # ----- Phone 索引 -----
+    build_phone_indices: true
+    phone_index_type: "auto"
+    phone_ivf_nlist: 256            # 双 GPU: 512
+    phone_save_immediately: true    # 立即保存释放内存
+
+    # ----- Gender 索引 -----
+    build_gender_indices: true
+    gender_ivf_nlist: 512           # 降低到512
+
+    # ----- Phone Clusters -----
+    build_phone_clusters: true
+
+    # ----- 内存优化 (防止 OOM) -----
+    low_memory_mode: true           # 启用低内存模式
+
+# -----------------------------------------------------------------------------
+# 计算资源配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0, 1]                     # 双 GPU 并行
+num_workers: 16                     # 双 GPU: 16 线程
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100
+
+# =============================================================================
+# 双 GPU 优化说明
+# =============================================================================
+# 如果使用双 RTX 4090 (各 24GB) + 240GB 内存:
+#
+# 1. 修改以下参数:
+#    - gpu_ids: [0, 1]
+#    - use_dual_gpu_version: true
+#    - num_workers: 16
+#    - batch_size: 32
+#
+# 2. 提升处理能力:
+#    - io_batch_size: 500000
+#    - gpu_add_batch: 500000
+#    - use_fp16: true
+#
+# 3. FAISS 优化:
+#    - nlist: 4096
+#    - train_size: 500000
+#    - nprobe: 128
+#
+# =============================================================================

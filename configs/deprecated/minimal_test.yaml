@@ -1,0 +1,30 @@
+# configs/minimal_test.yaml
+# 最小化配置 - 用于诊断
+
+# 继承默认配置
+paths:
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+  cache_dir: "./cache"
+  checkpoints_dir: "./checkpoints"
+  output_dir: "./outputs"
+
+ssl:
+  layer: 6  # 降低到 Layer 6 减少身份泄漏
+
+eta_wavlm:
+  enabled: true  # 启用去身份
+
+samm:
+  masking:
+    token_mask_ratio: 0.0   # 禁用掩码测试
+    span_mask_ratio: 0.0    # 禁用掩码测试
+
+knn_vc:
+  k_neighbors: 1           # 强制 Top-1
+  use_top1: true
+  use_cosine: true
+  use_phone_constraint: true
+  use_gender_constraint: true
+
+device: "cuda"

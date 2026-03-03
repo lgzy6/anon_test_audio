@@ -1,0 +1,36 @@
+# DS-SAMM-Anon v3.2 测试配置
+# 用于小规模验证框架可行性
+
+# 路径配置
+paths:
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+  cache_dir: "./cache"
+  checkpoints_dir: "./checkpoints"
+  output_dir: "./outputs/v32_test"
+
+# SSL 配置
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+
+# v3.2 解耦配置
+disentangle:
+  enabled: true
+  variance_threshold: 0.95  # 内容子空间解释方差阈值
+
+# v3.2 量化池配置
+pool_v32:
+  n_patterns: 8
+  centers_per_phone: 64
+  use_gender_split: true
+  min_samples: 100
+
+# 测试参数
+test:
+  max_samples: 100000  # 测试用最大样本数
+  max_utterances: 500
+
+# 设备配置
+device: "cuda"

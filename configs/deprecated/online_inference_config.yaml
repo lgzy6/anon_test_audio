@@ -1,0 +1,92 @@
+# configs/online_inference.yaml
+# ============================================================
+# Online Anonymization Pipeline Configuration
+# SAMM + Eta-WavLM + Private kNN-VC
+# ============================================================
+
+# ----- 路径配置 -----
+paths:
+  wavlm: "checkpoints/WavLM-Large.pt"
+  subspace: "data/samm_anon/checkpoints/speaker_subspace.pt"
+  codebook: "data/samm_anon/checkpoints/codebook.pt"
+  pattern_matrix: "data/samm_anon/checkpoints/pattern_matrix.pt"
+  phone_predictor: "checkpoints/phone_decoder.pt"
+  duration_predictor: "checkpoints/duration_decoder.pt"
+  target_pool: "data/samm_anon/checkpoints/target_pool/"
+  vocoder: "checkpoints/hifigan.pt"
+
+# ----- Stage 1: SSL 特征提取 -----
+ssl:
+  layer: 15
+  # WavLM-Large: 24 layers, layer 15 commonly used
+
+# ----- Stage 2: Eta-WavLM -----
+eta_wavlm:
+  subspace_dim: 64
+  # 子空间维度，越大去除越多说话人信息
+
+# ----- Stage 3: SAMM -----
+samm:
+  codebook_size: 512
+  
+  # 掩码策略
+  masking:
+    random_mask_prob: 0.10      # 随机掩码比例
+    span_mask_prob: 0.15        # 连续片段掩码比例
+    span_length: [3, 10]        # 片段长度范围
+    mask_token_id: 512          # 掩码符号ID
+
+# ----- Stage 3': Phone Predictor -----
+phone_predictor:
+  num_phones: 41                # CMU phoneset
+  # 预训练权重来自 Private kNN-VC
+
+# ----- Stage 3.3 + 4.2: Duration Anonymization -----
+duration:
+  use_predictor: true
+  predictor_weight: 0.7         # w: 0=保持原始, 1=完全预测
+  noise_std: 0.1                # 额外扰动
+  quant_step: 1.0               # 量化步长 (帧)
+  min_duration: 1
+  max_duration: 50
+
+# ----- Stage 4: kNN-VC -----
+knn_vc:
+  k: 4                          # 近邻数量
+  temperature: 1.0              # softmax 温度
+  
+  # 两级检索
+  retrieval:
+    use_phone_clusters: true    # 是否使用音素聚类 (推荐)
+    num_clusters: 8             # 每个音素的聚类数 (隐私-效用权衡)
+                                # 小值=高隐私, 大值=高效用
+    use_knn_refinement: false   # 是否启用 kNN 精调
+  
+  # 约束设置
+  constraints:
+    symbol: "soft"              # hard/soft/none
+    phone: "soft"               # 音素约束 (通常由 clustering 处理)
+    gender: "hard"              # 性别约束
+
+# ----- Stage 5: Vocoder -----
+vocoder:
+  type: "hifigan"               # hifigan / bigvgan
+  # 使用 kNN-VC 训练的 HiFi-GAN
+
+# ----- 目标选择策略 -----
+target_selection:
+  gender: "same"                # same/cross/M/F/random
+  # same: 保持相同性别
+  # cross: 交叉性别
+  # random: 随机选择
+
+# ----- 全局设置 -----
+global:
+  device: "cuda"
+  sample_rate: 16000
+  seed: 42
+
+# ----- 输出设置 -----
+output:
+  save_intermediates: false     # 是否保存中间结果
+  output_format: "wav"

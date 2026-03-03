@@ -1,0 +1,26 @@
+Looking in indexes: http://mirrors.aliyun.com/pypi/simple
+Collecting matplotlib
+  Downloading http://mirrors.aliyun.com/pypi/packages/cb/aa/7ab67f2b729ae6a91bcf9dcac0affb95fb8c56f7fd2b2af894ae0b0cf6fa/matplotlib-3.10.8-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (8.7 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 8.7/8.7 MB 67.1 MB/s  0:00:00
+Collecting contourpy>=1.0.1 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/32/5c/1ee32d1c7956923202f00cf8d2a14a62ed7517bdc0ee1e55301227fc273c/contourpy-1.3.2-cp310-cp310-manylinux_2_17_x86_64.manylinux2014_x86_64.whl (325 kB)
+Collecting cycler>=0.10 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/e7/05/c19819d5e3d95294a6f5947fb9b9629efb316b96de511b418c53d245aae6/cycler-0.12.1-py3-none-any.whl (8.3 kB)
+Collecting fonttools>=4.22.0 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/69/69/4ca02ee367d2c98edcaeb83fc278d20972502ee071214ad9d8ca85e06080/fonttools-4.61.1-cp310-cp310-manylinux2014_x86_64.manylinux_2_17_x86_64.whl (4.9 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 4.9/4.9 MB 84.9 MB/s  0:00:00
+Collecting kiwisolver>=1.3.1 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/d4/42/0f333164e6307a0687d1eb9ad256215aae2f4bd5d28f4653d6cd319a3ba3/kiwisolver-1.4.9-cp310-cp310-manylinux_2_12_x86_64.manylinux2010_x86_64.whl (1.6 MB)
+     ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━ 1.6/1.6 MB 54.7 MB/s  0:00:00
+Requirement already satisfied: numpy>=1.23 in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from matplotlib) (1.24.3)
+Requirement already satisfied: packaging>=20.0 in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from matplotlib) (25.0)
+Requirement already satisfied: pillow>=8 in /root/miniconda3/envs/anon_test/lib/python3.10/site-packages (from matplotlib) (12.1.0)
+Collecting pyparsing>=3 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/8b/40/2614036cdd416452f5bf98ec037f38a1afb17f327cb8e6b652d4729e0af8/pyparsing-3.3.1-py3-none-any.whl (121 kB)
+Collecting python-dateutil>=2.7 (from matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/ec/57/56b9bcc3c9c6a792fcbaf139543cee77261f3651ca9da0c93f5c1221264b/python_dateutil-2.9.0.post0-py2.py3-none-any.whl (229 kB)
+Collecting six>=1.5 (from python-dateutil>=2.7->matplotlib)
+  Downloading http://mirrors.aliyun.com/pypi/packages/b7/ce/149a00dd41f10bc29e5921b496af8b574d8413afcd5e30dfa0ed46c2cc5e/six-1.17.0-py2.py3-none-any.whl (11 kB)
+Installing collected packages: six, pyparsing, kiwisolver, fonttools, cycler, contourpy, python-dateutil, matplotlib
+
+Successfully installed contourpy-1.3.2 cycler-0.12.1 fonttools-4.61.1 kiwisolver-1.4.9 matplotlib-3.10.8 pyparsing-3.3.1 python-dateutil-2.9.0.post0 six-1.17.0

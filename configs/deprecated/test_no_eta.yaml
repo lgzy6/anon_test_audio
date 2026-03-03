@@ -1,0 +1,71 @@
+# configs/test_no_eta.yaml
+# =============================================================================
+# 测试配置 - 禁用 Eta-WavLM (验证特征空间匹配问题)
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# 路径配置
+# -----------------------------------------------------------------------------
+paths:
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+  cache_dir: "./cache"
+  checkpoints_dir: "./checkpoints"
+  output_dir: "./outputs"
+  log_dir: "./logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  enabled: false  # 🔴 禁用 Eta-WavLM 以匹配 Target Pool
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 512
+  masking:
+    token_mask_ratio: 0.10
+    span_mask_ratio: 0.15
+    min_span: 3
+    max_span: 10
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k_neighbors: 1      # 强制 Top-1
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+  use_top1: true      # ✓ 使用 Top-1
+  use_cosine: true    # ✓ 使用余弦相似度
+
+phone_predictor:
+  checkpoint: "./checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# 设备配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0]
+num_workers: 4
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "INFO"
+  save_to_file: true
+  log_interval: 100

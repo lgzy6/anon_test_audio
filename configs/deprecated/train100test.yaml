@@ -1,0 +1,191 @@
+# configs/train100test.yaml
+# =============================================================================
+# SAMM-Anon Test Configuration (train-clean-100)
+# =============================================================================
+# 小规模测试配置
+# 用于快速验证流程、调试代码、开发新功能
+# 使用最小参数保证快速完成
+
+# -----------------------------------------------------------------------------
+# 路径配置
+# -----------------------------------------------------------------------------
+paths:
+  # 数据集
+  librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
+  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
+
+  # 预训练模型
+  wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+
+  # 缓存目录
+  cache_dir: "./cache"
+
+  # 模型存储
+  checkpoints_dir: "./checkpoints"
+
+  # 输出目录
+  output_dir: "./outputs"
+
+  # 日志目录
+  log_dir: "./logs"
+
+# -----------------------------------------------------------------------------
+# SSL 配置
+# -----------------------------------------------------------------------------
+ssl:
+  model: "wavlm-large"
+  layer: 15
+  hidden_dim: 1024
+  hop_size: 320
+  sample_rate: 16000
+
+# -----------------------------------------------------------------------------
+# 模型配置 (测试用较小值)
+# -----------------------------------------------------------------------------
+eta_wavlm:
+  speaker_subspace_dim: 64
+
+samm:
+  codebook_size: 256              # ★ 减小 codebook (512 -> 256)
+  masking:
+    token_mask_ratio: 0.10
+    span_mask_ratio: 0.15
+    min_span: 3
+    max_span: 10
+    duration_noise_std: 0.15
+    duration_quant_step: 0.02
+    rhythm_window: 5
+    rhythm_shuffle_prob: 0.3
+
+pattern:
+  smoothing_alpha: 0.1
+
+knn_vc:
+  k_neighbors: 4
+  num_clusters: 8
+  use_phone_constraint: true
+  use_gender_constraint: true
+
+phone_predictor:
+  checkpoint: "./checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Offline 训练配置 (测试优化 - 快速完成)
+# -----------------------------------------------------------------------------
+offline:
+  # 小规模数据集
+  train_split: "train-clean-100"
+
+  batch_size: 8
+  num_workers: 4
+
+  # =========================================================================
+  # Step 1: 特征提取 (WavLM)
+  # =========================================================================
+  feature_extraction:
+    max_utterances: null            # 处理全部 (train-clean-100 约 28k utterances)
+    save_interval: 1000
+    use_fp16: false
+
+  # =========================================================================
+  # Step 2: 子空间学习 (Eta-WavLM)
+  # =========================================================================
+  subspace_learning:
+    min_utterances_per_speaker: 5
+    max_frames_per_speaker: 30000   # ★ 减少采样
+
+  # =========================================================================
+  # Step 3: 特征清洗 (去说话人)
+  # =========================================================================
+  feature_cleaning:
+    batch_size: 50000
+
+  # =========================================================================
+  # Step 4: Codebook 训练
+  # =========================================================================
+  codebook_training:
+    max_samples: 200000             # ★ 20万帧 (足够测试)
+    kmeans_batch_size: 4096
+    kmeans_max_iter: 20             # ★ 减少迭代
+    num_segments: 10
+    sampling_method: "segmented"
+
+  # =========================================================================
+  # Step 5: Pattern Matrix 学习
+  # =========================================================================
+  pattern_learning:
+    smoothing_alpha: 0.1
+    device: cuda
+    gpu_batch: 200000
+
+  # =========================================================================
+  # Step 6: Target Pool 构建 (测试优化)
+  # =========================================================================
+  pool_building:
+    # ----- 运行模式 -----
+    use_robust_version: true        # 使用 robust 版本
+
+    # ----- IO 配置 -----
+    io_batch_size: 50000
+
+    # ----- GPU 配置 -----
+    gpu_id: 0
+    gpu_add_batch: 100000           # 测试规模可以用较大批次
+    use_gpu: true
+
+    # ----- FAISS IVF 配置 -----
+    nlist: 1024                     # ★ 减少聚类数 (2048 -> 1024)
+    train_size: 150000              # ★ 减少训练样本
+    nprobe: 32                      # ★ 减少探测数
+
+    # ----- 分片配置 -----
+    shard_size: 5000000
+    use_sharding: false             # 小数据集不需要分片
+
+    # ----- 子索引配置 -----
+    min_samples_per_cluster: 50     # ★ 降低阈值
+
+    # ----- Phone 索引 -----
+    build_phone_indices: true
+    phone_index_type: "auto"
+    phone_ivf_nlist: 128            # ★ 减小
+
+    # ----- Gender 索引 -----
+    build_gender_indices: true
+    gender_ivf_nlist: 512           # ★ 减小
+
+    # ----- Phone Clusters -----
+    build_phone_clusters: true
+
+    # =========================================================================
+    # Robust 版本配置
+    # =========================================================================
+    robust:
+      enable_checkpointing: true
+      checkpoint_interval: 100000
+
+      symbol_batch_size: 10000
+
+      memory_warning_threshold: 0.80
+      memory_critical_threshold: 0.90
+
+      auto_gc_interval: 50000
+
+      max_retries: 3
+      retry_delay: 5
+
+# -----------------------------------------------------------------------------
+# 计算资源配置
+# -----------------------------------------------------------------------------
+device: "cuda"
+gpu_ids: [0]
+num_workers: 4
+pin_memory: true
+
+# -----------------------------------------------------------------------------
+# 日志配置
+# -----------------------------------------------------------------------------
+logging:
+  level: "DEBUG"                    # ★ 测试用 DEBUG 级别
+  save_to_file: true
+  log_interval: 50                  # ★ 更频繁输出
