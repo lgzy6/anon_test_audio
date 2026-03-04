@@ -25,8 +25,10 @@
 
 import sys
 import json
+import argparse
 import torch
 import numpy as np
+import yaml
 from pathlib import Path
 from tqdm import tqdm
 import h5py
@@ -35,10 +37,28 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Step 2: Compute Eta-WavLM Projection")
+    parser.add_argument('--config', type=str, default=None,
+                        help='Config YAML path')
+    parser.add_argument('--chunk-size', type=int, default=2000,
+                        help='Frame chunk size for long utterances (default: 2000)')
+    args = parser.parse_args()
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     base_dir = Path(__file__).parent.parent
-    cache_dir = base_dir / 'cache' / 'features' / 'wavlm'
-    ckpt_dir = base_dir / 'checkpoints'
+
+    # 从 config 或默认路径读取
+    config_path = Path(args.config) if args.config else base_dir / 'configs' / 'base.yaml'
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+        train_split = config['offline'].get('train_split', 'train-clean-100')
+        split_name = train_split.replace('-', '_')
+        cache_dir = Path(config['paths']['cache_dir']) / 'features' / 'wavlm' / split_name
+        ckpt_dir = Path(config['paths']['checkpoints_dir'])
+    else:
+        cache_dir = base_dir / 'cache' / 'features' / 'wavlm'
+        ckpt_dir = base_dir / 'checkpoints'
 
     # === 检查步骤 1 的输出 ===
     required_files = [
@@ -58,9 +78,15 @@ def main():
         metadata = json.load(f)
     utterances = metadata['utterances']
 
-    P = embeddings_pca.shape[1]  # PCA dim (128)
+    P = embeddings_pca.shape[1]  # PCA dim
     Q = metadata['feature_dim']  # WavLM dim (1024)
-    regularization = 1e-6
+
+    # 不做归一化，保持原始尺度
+    embeddings_mean = np.zeros(P)
+    embeddings_std = np.ones(P)
+
+    # 自适应正则化：P 越大，正则化越强
+    regularization = max(2e-4, 2e-3 * (P / 128))
 
     print(f"Speaker PCA dim (P): {P}")
     print(f"SSL feature dim (Q): {Q}")
@@ -109,14 +135,19 @@ def main():
                 embeddings_pca[pca_idx]
             ).to(device).to(torch.float64)  # (P,)
 
-            # 复制到每帧 + 加偏置列
-            d_rep = d.unsqueeze(0).expand(T, -1)         # (T, P)
-            ones = torch.ones(T, 1, dtype=torch.float64, device=device)
-            D_tilde = torch.cat([d_rep, ones], dim=1)     # (T, P+1)
+            # 分块累积（防止长话语 GPU OOM）
+            CHUNK = args.chunk_size
+            for chunk_start in range(0, T, CHUNK):
+                chunk_end = min(chunk_start + CHUNK, T)
+                s_chunk = s[chunk_start:chunk_end]
+                T_chunk = s_chunk.shape[0]
 
-            # 累积正规方程
-            G += D_tilde.T @ D_tilde   # (P+1, P+1)
-            H += D_tilde.T @ s         # (P+1, Q)
+                d_rep = d.unsqueeze(0).expand(T_chunk, -1)
+                ones = torch.ones(T_chunk, 1, dtype=torch.float64, device=device)
+                D_tilde = torch.cat([d_rep, ones], dim=1)
+
+                G += D_tilde.T @ D_tilde
+                H += D_tilde.T @ s_chunk
 
             n_frames_total += T
             n_utterances_processed += 1
@@ -204,6 +235,8 @@ def main():
         'residual_norm': residual,
         'regularization': regularization,
         'solver': solver,
+        'embeddings_mean': torch.from_numpy(embeddings_mean).float(),
+        'embeddings_std': torch.from_numpy(embeddings_std).float(),
     }, save_path)
 
     print(f"\nSaved: {save_path}")

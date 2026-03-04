@@ -242,23 +242,27 @@ class FeatureExtractor:
 def run_feature_extraction(config: Dict) -> Dict:
     """运行特征提取"""
     from data.datasets.librispeech import LibriSpeechDataset
-    
+
+    train_split = config['offline'].get('train_split', 'train-other-500')
+
     dataset = LibriSpeechDataset(
         root=config['paths']['librispeech_root'],
-        split=config['offline'].get('train_split', 'train-other-500'),
+        split=train_split,
     )
-    
+
     extractor = FeatureExtractor(
         wavlm_ckpt=config['paths']['wavlm_checkpoint'],
         layer=config['ssl']['layer'],
         device=config.get('device', 'cuda'),
         batch_size=config['offline'].get('batch_size', 8),
     )
-    
-    output_dir = Path(config['paths']['cache_dir']) / 'features' / 'wavlm'
-    
+
+    # 根据数据集名称创建子目录
+    split_name = train_split.replace('-', '_')  # train-clean-360 -> train_clean_360
+    output_dir = Path(config['paths']['cache_dir']) / 'features' / 'wavlm' / split_name
+
     feat_cfg = config['offline'].get('feature_extraction', {})
-    
+
     metadata = extractor.extract_dataset(
         dataset=dataset,
         output_dir=str(output_dir),
@@ -266,5 +270,5 @@ def run_feature_extraction(config: Dict) -> Dict:
         save_interval=feat_cfg.get('save_interval', 1000),
         resume=True,
     )
-    
+
     return metadata

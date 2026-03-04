@@ -25,6 +25,7 @@ import argparse
 import torch
 import numpy as np
 import pickle
+import yaml
 from pathlib import Path
 from tqdm import tqdm
 import torchaudio
@@ -34,43 +35,51 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 def find_audio_for_utterance(utt_id, librispeech_roots):
     """
-    根据 utt_id (如 "100-121669-0000") 定位 LibriSpeech 音频文件
+    根据 utt_id 定位音频文件
 
-    LibriSpeech 路径格式: <root>/<split>/<speaker>/<chapter>/<speaker>-<chapter>-<utt>.flac
-    utt_id 格式: <speaker>-<chapter>-<utt>
+    支持格式:
+      LibriSpeech: utt_id="100-121669-0000" → <root>/<split>/100/121669/100-121669-0000.flac
+      LibriTTS:    utt_id="100_121669_0000"  → <root>/<split>/100/121669/100_121669_0000.wav
     """
-    parts = utt_id.split('-')
-    if len(parts) != 3:
-        return None
-
-    speaker, chapter, utt_num = parts
-
-    for root in librispeech_roots:
-        root = Path(root)
-        if not root.exists():
+    # 尝试 '-' 和 '_' 两种分隔符
+    for sep in ['-', '_']:
+        parts = utt_id.split(sep)
+        if len(parts) < 3:
             continue
 
-        # 搜索所有 split 子目录
-        for split_dir in root.iterdir():
-            if not split_dir.is_dir():
-                continue
-            audio_path = split_dir / speaker / chapter / f"{utt_id}.flac"
-            if audio_path.exists():
-                return str(audio_path)
+        speaker = parts[0]
+        chapter = parts[1]
 
-        # 也可能直接在 root 下 (如 root 已经是 split)
-        audio_path = root / speaker / chapter / f"{utt_id}.flac"
-        if audio_path.exists():
-            return str(audio_path)
+        for root in librispeech_roots:
+            root = Path(root)
+            if not root.exists():
+                continue
+
+            # 搜索 .flac 和 .wav
+            for ext in ['.flac', '.wav']:
+                # 搜索所有 split 子目录
+                for split_dir in root.iterdir():
+                    if not split_dir.is_dir():
+                        continue
+                    audio_path = split_dir / speaker / chapter / f"{utt_id}{ext}"
+                    if audio_path.exists():
+                        return str(audio_path)
+
+                # 也可能直接在 root 下 (如 root 已经是 split)
+                audio_path = root / speaker / chapter / f"{utt_id}{ext}"
+                if audio_path.exists():
+                    return str(audio_path)
 
     return None
 
 
 def main():
     parser = argparse.ArgumentParser(description="Step 1: Extract Speaker Embeddings + PCA")
+    parser.add_argument('--config', type=str, default=None,
+                        help='Config YAML path (reads paths from base.yaml)')
     parser.add_argument('--librispeech', type=str, nargs='+',
-                        default=['/root/autodl-tmp/datasets/LibriSpeech'],
-                        help='LibriSpeech root directories')
+                        default=None,
+                        help='LibriSpeech root directories (overrides config)')
     parser.add_argument('--pca-dim', type=int, default=128,
                         help='PCA output dimension (default: 128)')
     parser.add_argument('--device', type=str, default='cuda',
@@ -79,8 +88,27 @@ def main():
 
     device = args.device if torch.cuda.is_available() else 'cpu'
     base_dir = Path(__file__).parent.parent
-    cache_dir = base_dir / 'cache' / 'features' / 'wavlm'
-    ckpt_dir = base_dir / 'checkpoints'
+
+    # 从 config 或默认路径读取
+    config = None
+    config_path = Path(args.config) if args.config else base_dir / 'configs' / 'base.yaml'
+    if config_path.exists():
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f)
+
+    if config is not None:
+        train_split = config['offline'].get('train_split', 'train-clean-100')
+        split_name = train_split.replace('-', '_')
+        cache_dir = Path(config['paths']['cache_dir']) / 'features' / 'wavlm' / split_name
+        ckpt_dir = Path(config['paths']['checkpoints_dir'])
+        default_librispeech = [config['paths']['librispeech_root']]
+    else:
+        cache_dir = base_dir / 'cache' / 'features' / 'wavlm'
+        ckpt_dir = base_dir / 'checkpoints'
+        default_librispeech = ['/root/autodl-tmp/datasets/LibriSpeech']
+
+    # CLI --librispeech 覆盖 config
+    librispeech_roots = args.librispeech if args.librispeech else default_librispeech
     ckpt_dir.mkdir(exist_ok=True)
 
     # === 加载 metadata ===
@@ -116,7 +144,7 @@ def main():
         speaker_id = utt['speaker_id']
 
         # 定位音频文件
-        audio_path = find_audio_for_utterance(utt_id, args.librispeech)
+        audio_path = find_audio_for_utterance(utt_id, librispeech_roots)
 
         if audio_path is None:
             skipped += 1
@@ -155,7 +183,7 @@ def main():
     if not all_embeddings:
         print("\nERROR: No embeddings extracted!")
         print("Check LibriSpeech paths:")
-        for p in args.librispeech:
+        for p in librispeech_roots:
             print(f"  {p} -> exists: {Path(p).exists()}")
         sys.exit(1)
 
@@ -170,7 +198,12 @@ def main():
     # === PCA 降维 ===
     from sklearn.decomposition import PCA
 
-    pca_dim = min(args.pca_dim, all_embeddings.shape[1], len(all_embeddings) - 1)
+    # 自适应 PCA 维度：min(目标维度, 特征维度, 样本数-1, 说话人数*10)
+    n_speakers = len(np.unique(all_speaker_ids))
+    pca_dim = min(args.pca_dim, all_embeddings.shape[1], len(all_embeddings) - 1, n_speakers * 10)
+
+    print(f"\nAuto PCA dim: {pca_dim} (speakers: {n_speakers})")
+
     pca_model = PCA(n_components=pca_dim, random_state=42)
     embeddings_pca = pca_model.fit_transform(all_embeddings)
 

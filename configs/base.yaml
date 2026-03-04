@@ -96,7 +96,7 @@ phone_predictor:
 # -----------------------------------------------------------------------------
 offline:
   # 数据集选择
-  train_split: "train-clean-100"    # train-clean-100 / train-clean-360 / train-other-500
+  train_split: "train-clean-360"    # 使用更大的数据集，包含更多说话人
 
   batch_size: 8
   num_workers: 4
@@ -105,7 +105,7 @@ offline:
   # Step 1: 特征提取 (WavLM)
   # =========================================================================
   feature_extraction:
-    max_utterances: null        # null = 处理全部
+    max_utterances: 5000        # 提取 5000 条话语（约 100+ 说话人）
     save_interval: 1000         # 每 N 个 utterance 保存进度 (断点续传)
     use_fp16: false
 

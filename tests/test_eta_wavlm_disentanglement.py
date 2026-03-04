@@ -43,10 +43,23 @@ from tests.test_v32_disentanglement import (
     analyze_phone_distribution,
 )
 from models.phone_predictor.predictor import PhonePredictor
+import yaml
 
 
 BASE_DIR = Path(__file__).parent.parent
-CACHE_DIR = BASE_DIR / 'cache' / 'features' / 'wavlm'
+
+# 从 config 读取路径
+config_path = BASE_DIR / 'configs' / 'base.yaml'
+if config_path.exists():
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    train_split = config['offline'].get('train_split', 'train-clean-100')
+    split_name = train_split.replace('-', '_')
+    CACHE_DIR = Path(config['paths']['cache_dir']) / 'features' / 'wavlm' / split_name
+else:
+    CACHE_DIR = BASE_DIR / 'cache' / 'features' / 'wavlm'
+
+CKPT_DIR = BASE_DIR / 'checkpoints'
 CKPT_DIR = BASE_DIR / 'checkpoints'
 
 
@@ -91,6 +104,27 @@ def compute_eta_for_frames(A_star, b_star, embeddings_pca,
     # 话语索引 → PCA 索引
     utt_to_pca = {int(idx): i for i, idx in enumerate(utt_indices)}
 
+    # 按说话人分组话语，确保采样覆盖所有说话人
+    spk_to_utts = {}
+    for utt_idx in utt_to_pca.keys():
+        spk = utterances[utt_idx]['speaker_id']
+        if spk not in spk_to_utts:
+            spk_to_utts[spk] = []
+        spk_to_utts[spk].append(utt_idx)
+
+    # 打乱每个说话人的话语顺序
+    for spk in spk_to_utts:
+        np.random.shuffle(spk_to_utts[spk])
+
+    # 轮流从每个说话人采样
+    speakers = list(spk_to_utts.keys())
+    utt_order = []
+    max_len = max(len(utts) for utts in spk_to_utts.values())
+    for i in range(max_len):
+        for spk in speakers:
+            if i < len(spk_to_utts[spk]):
+                utt_order.append(spk_to_utts[spk][i])
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     A_star_d = A_star.to(device)
     b_star_d = b_star.to(device)
@@ -110,11 +144,9 @@ def compute_eta_for_frames(A_star, b_star, embeddings_pca,
     with h5py.File(CACHE_DIR / 'features.h5', 'r') as f:
         features_ds = f['features']
 
-        for utt_meta_idx, utt in enumerate(tqdm(utterances, desc="Computing η")):
-            if utt_meta_idx not in utt_to_pca:
-                continue
-
+        for utt_meta_idx in tqdm(utt_order, desc="Computing η"):
             pca_idx = utt_to_pca[utt_meta_idx]
+            utt = utterances[utt_meta_idx]
             start, end = utt['h5_start_idx'], utt['h5_end_idx']
 
             if end <= start:
@@ -186,7 +218,12 @@ def run_four_way_probe(s, eta, phones, speaker_ids,
     phones_ns = phones[mask]
     spk_ns = speaker_ids[mask]
 
-    n_phones = len(np.unique(phones_ns))
+    # 重新映射 phone ID 到连续整数 [0, n_phones-1]
+    unique_phones = np.unique(phones_ns)
+    n_phones = len(unique_phones)
+    phone_to_int = {p: i for i, p in enumerate(unique_phones)}
+    phones_ns = np.array([phone_to_int[p] for p in phones_ns])
+
     unique_spk = np.unique(spk_ns)
     n_speakers = len(unique_spk)
 
@@ -329,6 +366,23 @@ def main():
         s, eta, phones, speaker_ids_frame,
         projector_on_s, projector_on_eta
     )
+
+    # === Energy ratio 诊断 ===
+    print("\n" + "=" * 50)
+    print("Energy Ratio Diagnostic")
+    print("=" * 50)
+    s_energy = np.linalg.norm(s, axis=1).mean()
+    eta_energy = np.linalg.norm(eta, axis=1).mean()
+    speaker_energy = np.linalg.norm(s - eta, axis=1).mean()
+    print(f"  ||s||  mean: {s_energy:.4f}")
+    print(f"  ||η||  mean: {eta_energy:.4f}")
+    print(f"  ||spk|| mean: {speaker_energy:.4f}")
+    print(f"  η/s ratio: {eta_energy/s_energy:.4f}  (expect 0.85-0.99)")
+    print(f"  spk/s ratio: {speaker_energy/s_energy:.4f}  (expect 0.01-0.15)")
+    if eta_energy / s_energy < 0.7:
+        print("  WARNING: Speaker component too large, check A_star/b_star")
+    elif eta_energy / s_energy > 0.99:
+        print("  WARNING: Speaker component negligible, check embedding quality")
 
     # === 可视化 ===
     if not args.skip_tsne:
