@@ -103,8 +103,16 @@ def main():
     utt_to_pca_idx = {int(utt_idx): pca_idx
                       for pca_idx, utt_idx in enumerate(utt_indices)}
 
+    # === 加载 phone predictor（用于过滤静音）===
+    phone_ckpt = ckpt_dir / 'phone_decoder.pt'
+    phone_predictor = None
+    if phone_ckpt.exists():
+        from models.phone_predictor.predictor import PhonePredictor
+        phone_predictor = PhonePredictor.load(str(phone_ckpt), device=device)
+        print("  Loaded phone predictor for silence filtering")
+
     # === 逐话语累积正规方程 ===
-    print("\nAccumulating normal equations...")
+    print("\nAccumulating normal equations (filtering silence)...")
 
     with h5py.File(cache_dir / 'features.h5', 'r') as f:
         features_ds = f['features']
@@ -129,6 +137,16 @@ def main():
                 continue
 
             s = torch.from_numpy(s_np).to(device).to(torch.float64)  # (T, Q)
+
+            # 过滤静音帧
+            if phone_predictor is not None:
+                with torch.no_grad():
+                    phones = phone_predictor(s.float())  # (T,)
+                    non_silence_mask = phones != 0
+                    s = s[non_silence_mask]
+                    T = s.shape[0]
+                    if T == 0:
+                        continue
 
             # 该话语的 PCA speaker embedding
             d = torch.from_numpy(

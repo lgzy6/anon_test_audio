@@ -22,6 +22,7 @@ import json
 import argparse
 import numpy as np
 import torch
+import yaml
 from pathlib import Path
 from tqdm import tqdm
 import h5py
@@ -38,7 +39,18 @@ from tests.test_v32_disentanglement import ContentSubspaceProjectorV2
 from models.phone_predictor.predictor import PhonePredictor
 
 BASE_DIR = Path(__file__).parent.parent
-CACHE_DIR = BASE_DIR / 'cache' / 'features' / 'wavlm'
+
+# 从 config 读取路径
+config_path = BASE_DIR / 'configs' / 'base.yaml'
+if config_path.exists():
+    with open(config_path, 'r') as f:
+        config = yaml.safe_load(f)
+    train_split = config['offline'].get('train_split', 'train-clean-100')
+    split_name = train_split.replace('-', '_')
+    CACHE_DIR = Path(config['paths']['cache_dir']) / 'features' / 'wavlm' / split_name
+else:
+    CACHE_DIR = BASE_DIR / 'cache' / 'features' / 'wavlm'
+
 CKPT_DIR = BASE_DIR / 'checkpoints'
 
 
@@ -77,14 +89,31 @@ def load_and_compute_eta_style(max_frames=50000):
     all_speaker_ids = []
     total_frames = 0
 
+    # 按说话人分组，轮询采样
+    spk_to_utts = {}
+    for utt_idx in utt_to_pca.keys():
+        spk = utterances[utt_idx]['speaker_id']
+        if spk not in spk_to_utts:
+            spk_to_utts[spk] = []
+        spk_to_utts[spk].append(utt_idx)
+
+    for spk in spk_to_utts:
+        np.random.shuffle(spk_to_utts[spk])
+
+    speakers = list(spk_to_utts.keys())
+    utt_order = []
+    max_len = max(len(utts) for utts in spk_to_utts.values())
+    for i in range(max_len):
+        for spk in speakers:
+            if i < len(spk_to_utts[spk]):
+                utt_order.append(spk_to_utts[spk][i])
+
     with h5py.File(CACHE_DIR / 'features.h5', 'r') as f:
         features_ds = f['features']
 
-        for utt_meta_idx, utt in enumerate(tqdm(utterances, desc="Computing η")):
-            if utt_meta_idx not in utt_to_pca:
-                continue
-
+        for utt_meta_idx in tqdm(utt_order, desc="Computing η"):
             pca_idx = utt_to_pca[utt_meta_idx]
+            utt = utterances[utt_meta_idx]
             start, end = utt['h5_start_idx'], utt['h5_end_idx']
 
             if end <= start:
@@ -105,12 +134,22 @@ def load_and_compute_eta_style(max_frames=50000):
             else:
                 phones = np.random.randint(0, 41, size=T)
 
+            # 过滤静音帧
+            non_silence_mask = phones != 0
+            if non_silence_mask.sum() == 0:
+                continue
+
+            eta = eta[non_silence_mask]
+            s_np = s_np[non_silence_mask]
+            phones = phones[non_silence_mask]
+            T_valid = eta.shape[0]
+
             all_eta.append(eta.cpu().numpy())
             all_s.append(s_np)
             all_phones.append(phones)
-            all_speaker_ids.extend([utt['speaker_id']] * T)
+            all_speaker_ids.extend([utt['speaker_id']] * T_valid)
 
-            total_frames += T
+            total_frames += T_valid
             if total_frames >= max_frames:
                 break
 

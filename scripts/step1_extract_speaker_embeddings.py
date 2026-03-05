@@ -197,12 +197,16 @@ def main():
 
     # === PCA 降维 ===
     from sklearn.decomposition import PCA
+    from sklearn.preprocessing import normalize
 
     # 自适应 PCA 维度：min(目标维度, 特征维度, 样本数-1, 说话人数*10)
     n_speakers = len(np.unique(all_speaker_ids))
     pca_dim = min(args.pca_dim, all_embeddings.shape[1], len(all_embeddings) - 1, n_speakers * 10)
 
     print(f"\nAuto PCA dim: {pca_dim} (speakers: {n_speakers})")
+
+    # L2 归一化（在 PCA 之前）
+    all_embeddings = normalize(all_embeddings, norm='l2', axis=1)
 
     pca_model = PCA(n_components=pca_dim, random_state=42)
     embeddings_pca = pca_model.fit_transform(all_embeddings)
