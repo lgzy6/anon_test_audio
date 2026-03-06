@@ -19,8 +19,8 @@ def main():
     parser.add_argument(
         '--config', '-c',
         type=str,
-        default='configs/server.yaml',
-        help='配置文件路径 (默认: configs/server.yaml)'
+        default='configs/base.yaml',
+        help='配置文件路径 (默认: configs/base.yaml)'
     )
     
     parser.add_argument(

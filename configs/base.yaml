@@ -1,15 +1,17 @@
 # configs/base.yaml
 # =============================================================================
-# SAMM-Anon 基础配置文件 (v2.1)
+# SAMM-Anon 基础配置文件 (Segment 方案)
 # =============================================================================
-# 包含所有参数的默认值和 v2.1 优化
-# 适用于: 开发、测试、小规模训练
+# 适用于: Eta-WavLM + Segment Style Extractor 架构
+# 训练流程: Step 1-5 (特征提取 → 风格预计算)
+# 测试流程: Step 6 (风格引导检索)
 #
-# 快速开始:
-#   - 小规模测试: 使用本配置
-#   - 生产环境: 使用 production.yaml
-#   - 调试测试: 使用 test.yaml
-#
+# 维度变化说明:
+#   Step 1: ECAPA-TDNN (192维) → PCA → 128维 speaker embedding
+#   Step 2: η = s(1024维) - (d_128 @ A_star + b_star) → η(1024维)
+#   Step 4: segment stats (4096维) → PCA → 64维 style vector
+#   Step 5: utterance style = avg(segment styles) → 64维
+#   Step 6: 使用 64维 style vector 进行检索
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -18,10 +20,10 @@
 paths:
   # 数据集
   librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
-  vpc_data_root: "/root/autodl-tmp/datasets/vpc_data/data"
 
   # 预训练模型
   wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
+  ecapa_checkpoint: "speechbrain/spkrec-ecapa-voxceleb"
 
   # 缓存与输出
   cache_dir: "./cache"
@@ -30,7 +32,7 @@ paths:
   log_dir: "./logs"
 
 # -----------------------------------------------------------------------------
-# SSL 配置 (WavLM)
+# WavLM 配置
 # -----------------------------------------------------------------------------
 ssl:
   model: "wavlm-large"
@@ -40,171 +42,103 @@ ssl:
   sample_rate: 16000
 
 # -----------------------------------------------------------------------------
-# 模型配置 (v2.1 优化)
+# Eta-WavLM 配置
 # -----------------------------------------------------------------------------
 eta_wavlm:
-  enabled: true                # v2.1: 可配置的 Eta-WavLM 投影
-  speaker_subspace_dim: 64     # D_s: 说话人子空间维度
-
-# Eta-WavLM v2 配置 (ECAPA-TDNN + 线性投影)
-eta_wavlm_v2:
-  enabled: false               # 启用后替代 eta_wavlm v1 的 PCA 方案
+  # Speaker embedding
   speaker_encoder: "speechbrain/spkrec-ecapa-voxceleb"
-  pca_dim: 128                 # Speaker embedding PCA 降维目标
-  regularization: 1.0e-6       # 正规方程正则化系数
-  # 检索参数
-  retrieval:
-    alpha: 0.3                 # style_sim 权重 (0=纯content, 1=纯style)
-    batch_size: 512            # 检索批大小
-  # 产物路径 (由 step1/step2 自动生成)
-  checkpoints:
-    eta_projection: "./checkpoints/eta_projection.pt"
-    speaker_pca_model: "./checkpoints/speaker_pca_model.pkl"
-    speaker_embeddings: "./checkpoints/speaker_embeddings_pca.npy"
-    P_orth: "./outputs/eta_validation/P_orth_on_eta.npy"
+  speaker_dim: 192             # ECAPA-TDNN 原始输出维度
+  pca_dim: 128                 # PCA 降维目标 (用于 Eta 投影)
 
-samm:
-  codebook_size: 512           # K: codebook 大小
-  masking:
-    token_mask_ratio: 0.10     # 随机 token 掩码比例
-    span_mask_ratio: 0.15      # 连续片段掩码比例
-    min_span: 3
-    max_span: 10
-    duration_noise_std: 0.15
-    duration_quant_step: 0.02
-    rhythm_window: 5
-    rhythm_shuffle_prob: 0.3
+  # Eta 投影
+  projection_type: "linear"    # 线性投影 A*d + b
+  regularization: 1.0e-6       # 正则化系数
+  # A_star: (128, 1024), b_star: (1024,)
+  # η = s - (d_128 @ A_star + b_star)
 
-pattern:
-  smoothing_alpha: 0.1         # Pattern Matrix 平滑参数
-
-knn_vc:
-  k: 4                           # kNN 近邻数 (代码使用 'k')
-  k_neighbors: 4                 # 兼容别名
-  num_clusters: 8                # 每个音素的聚类数
-  use_phone_constraint: true
-  use_gender_constraint: true
-  # v2.1 优化参数 (推荐)
-  use_top1: true                 # ✓ 使用 Top-1 而非加权平均
-  use_cosine: true               # ✓ 使用余弦相似度而非 L2 距离
-
+# -----------------------------------------------------------------------------
+# Phone Predictor 配置
+# -----------------------------------------------------------------------------
 phone_predictor:
+  num_phones: 41               # 音素数量
+  hidden_dim: 256
+  num_layers: 2
   checkpoint: "./checkpoints/phone_decoder.pt"
+
+# -----------------------------------------------------------------------------
+# Segment Style Extractor 配置
+# -----------------------------------------------------------------------------
+style_extractor:
+  segment_type: "phone"        # phone-based segmentation
+  min_segment_frames: 3        # 最小段长度
+
+  # 原始特征维度
+  raw_dim: 4096                # 4 × 1024 = [mean, std, delta_mean, delta_std]
+
+  # PCA 降维
+  pca_dim: 64                  # 风格向量维度 (segment/utterance level)
+
+  # 段级特征
+  features:
+    - "mean"                   # mean(η)
+    - "std"                    # std(η)
+    - "delta_abs_mean"         # mean(|Δη|)
+    - "delta_std"              # std(Δη)
 
 # -----------------------------------------------------------------------------
 # Offline 训练配置
 # -----------------------------------------------------------------------------
 offline:
-  # 数据集选择
-  train_split: "train-clean-360"    # 使用更大的数据集，包含更多说话人
+  # 数据集
+  train_split: "train-clean-360"
+  test_split: "test-clean"
 
-  batch_size: 8
-  num_workers: 4
-
-  # =========================================================================
-  # Step 1: 特征提取 (WavLM)
-  # =========================================================================
+  # Step 1: 特征提取
   feature_extraction:
-    max_utterances: 5000        # 提取 5000 条话语（约 100+ 说话人）
-    save_interval: 1000         # 每 N 个 utterance 保存进度 (断点续传)
-    use_fp16: false
+    max_utterances: 5000       # 提取话语数
+    batch_size: 8
+    num_workers: 4
 
-  # =========================================================================
-  # Step 2: 子空间学习 (Eta-WavLM)
-  # =========================================================================
-  subspace_learning:
-    min_utterances_per_speaker: 5
-    max_frames_per_speaker: 50000   # 每说话人最多采样帧数
+  # Step 2: Eta 投影训练
+  eta_training:
+    max_frames: null           # null = 使用全部数据
+    learning_rate: 0.001
+    num_epochs: 10
 
-  # =========================================================================
-  # Step 3: 特征清洗 (去说话人)
-  # =========================================================================
-  feature_cleaning:
-    batch_size: 50000           # 每批处理帧数
+  # Step 3: Phone Predictor 训练
+  phone_training:
+    max_utterances: 5000
+    batch_size: 32
+    learning_rate: 0.001
+    num_epochs: 20
 
-  # =========================================================================
-  # Step 4: Codebook 训练
-  # =========================================================================
-  codebook_training:
-    max_samples: 300000         # 训练样本数
-    kmeans_batch_size: 4096
-    kmeans_max_iter: 30
-    num_segments: 10            # 分段采样数
-    sampling_method: "segmented"  # segmented / uniform
+  # Step 4: Style Extractor 训练
+  style_training:
+    max_frames: null           # null = 使用全部数据
+    max_segments: null         # null = 使用全部段
 
-  # =========================================================================
-  # Step 5: Pattern Matrix 学习
-  # =========================================================================
-  pattern_learning:
-    smoothing_alpha: 0.1
-    device: cuda
-    gpu_batch: 200000
+  # Step 5: 预计算话语风格
+  style_precompute:
+    batch_size: 100
 
-  # =========================================================================
-  # Step 6: Target Pool 构建
-  # =========================================================================
-  pool_building:
-    # ----- 运行模式 (v3.0 新增) -----
-    use_v3_version: false         # v3.0: Pattern 分区池 (修复 WER > 100%)
-    use_robust_version: true      # 使用 robust 版本 (支持断点续传)
+# -----------------------------------------------------------------------------
+# Step 6: 风格引导检索配置
+# -----------------------------------------------------------------------------
+retrieval:
+  # 系统模式
+  system: "B"                  # A=baseline, B=proposed, C=transfer
 
-    # ----- v3.0 Pattern 配置 -----
-    n_patterns: 8                 # Pattern 聚类数量
-    use_transition_matrix: true   # 使用转移矩阵作为 Pattern 特征
+  # 检索约束
+  use_phone_constraint: true   # Phone-constrained kNN
+  use_gender_constraint: true  # 同性别检索
+  use_speaker_constraint: true # 不同说话人
 
-    # ----- IO 配置 -----
-    io_batch_size: 50000          # 磁盘读取批大小 (降低内存峰值)
+  # kNN 参数
+  top_k: 1                     # Top-k 检索
+  similarity_metric: "cosine"  # cosine / l2
 
-    # ----- GPU 配置 -----
-    gpu_id: 0
-    gpu_add_batch: 100000         # GPU 每批添加向量数 (关键: 防止 OOM)
-    use_gpu: true
-
-    # ----- FAISS IVF 配置 -----
-    nlist: 2048                   # IVF 聚类数
-    train_size: 200000            # 训练索引用的样本数
-    nprobe: 64                    # 搜索时探测的聚类数
-
-    # ----- 分片配置 (大规模数据) -----
-    shard_size: 5000000           # 每分片向量数 (500万)
-    use_sharding: false           # 数据量 < 1000万时关闭
-
-    # ----- 子索引配置 -----
-    min_samples_per_cluster: 100
-
-    # ----- Phone 索引 -----
-    build_phone_indices: true
-    phone_index_type: "auto"      # flat / ivf / auto
-    phone_ivf_nlist: 256
-
-    # ----- Gender 索引 -----
-    build_gender_indices: true
-    gender_ivf_nlist: 1024
-
-    # ----- Phone Clusters (pknnvc 格式) -----
-    build_phone_clusters: true
-
-    # =========================================================================
-    # Robust 版本特有配置 (断点续传 & 内存优化)
-    # =========================================================================
-    robust:
-      # ----- Checkpoint 配置 -----
-      enable_checkpointing: true    # 启用断点续传
-      checkpoint_interval: 100000   # 每处理 N 帧保存一次 checkpoint
-
-      # ----- 内存优化 -----
-      symbol_batch_size: 10000      # 符号分配批次大小
-
-      # ----- 内存监控 -----
-      memory_warning_threshold: 0.80    # 内存警告阈值 (80%)
-      memory_critical_threshold: 0.90   # 内存临界阈值 (90%)
-
-      # ----- 自动清理 -----
-      auto_gc_interval: 50000       # 每 N 帧执行一次 GC
-
-      # ----- 错误恢复 -----
-      max_retries: 3                # 最大重试次数
-      retry_delay: 5                # 重试延迟 (秒)
+  # 风格权重
+  style_weight: 1.0            # 风格相似度权重
 
 # -----------------------------------------------------------------------------
 # 计算资源配置
