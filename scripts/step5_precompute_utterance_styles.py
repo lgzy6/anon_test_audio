@@ -35,10 +35,17 @@ BASE_DIR = Path(__file__).parent.parent
 
 
 def main():
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default=None)
+    parser.add_argument('--sample-ratio', type=float, default=1.0,
+                        help='Sample ratio (0.0-1.0)')
+    args = parser.parse_args()
+
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # 读取配置
-    config_path = BASE_DIR / 'configs' / 'base.yaml'
+    config_path = Path(args.config) if args.config else BASE_DIR / 'configs' / 'base.yaml'
     if config_path.exists():
         with open(config_path, 'r') as f:
             config = yaml.safe_load(f)
@@ -71,7 +78,18 @@ def main():
 
     phone_predictor = PhonePredictor.load(str(ckpt_dir / 'phone_decoder.pt'), device=device)
 
-    print(f"\nProcessing {len(utterances)} utterances...")
+    # 采样
+    if args.sample_ratio < 1.0:
+        import random
+        random.seed(42)
+        valid_utts = [i for i in range(len(utterances)) if i in utt_to_pca]
+        sample_size = int(len(valid_utts) * args.sample_ratio)
+        sampled_utts = set(random.sample(valid_utts, sample_size))
+        print(f"Sampled {len(sampled_utts)}/{len(valid_utts)} utterances")
+    else:
+        sampled_utts = None
+
+    print(f"\nProcessing utterances...")
 
     styles = []
     speaker_ids = []
@@ -83,6 +101,8 @@ def main():
 
         for utt_idx, utt in enumerate(tqdm(utterances, desc="Computing styles")):
             if utt_idx not in utt_to_pca:
+                continue
+            if sampled_utts is not None and utt_idx not in sampled_utts:
                 continue
 
             pca_idx = utt_to_pca[utt_idx]

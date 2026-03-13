@@ -38,7 +38,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from models.phone_predictor.predictor import PhonePredictor
 
 # Import from test.py
-exec(open(Path(__file__).parent / "test.py").read(), globals())
+from test import WindowConfig, WindowStyleExtractor
 
 
 @dataclass

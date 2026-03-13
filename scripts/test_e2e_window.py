@@ -22,13 +22,14 @@ import json
 import h5py
 from pathlib import Path
 from tqdm import tqdm
+from scipy.interpolate import interp1d
 
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
 BASE_DIR = Path(__file__).parent.parent
 
 # Import WindowConfig and WindowStyleExtractor
-exec(open(Path(__file__).parent / "test.py").read(), globals())
+from test import WindowConfig, WindowStyleExtractor
 
 
 def load_models(device='cuda'):
@@ -173,7 +174,8 @@ def select_target_utterance(source_style_windows, source_gender, target_pool, mo
     best_idx = valid_idx[0]
 
     for idx in valid_idx:
-        tgt_styles = pool_data['window_styles'][idx]
+        s, e = pool_data['utt_boundaries'][idx]
+        tgt_styles = pool_data['styles'][s:e]
         tgt_avg = tgt_styles.mean(axis=0)
         sim = float(np.dot(src_style_avg, tgt_avg))
         if sim > best_sim:
@@ -212,15 +214,20 @@ def anonymize_window_guided(source, target_idx, target_pool, phone_predictor, al
         tgt_phones = phone_predictor(tgt_feats_t).cpu().numpy()
 
     # Get target windows
-    tgt_styles = pool_data['window_styles'][tgt_utt_idx]
-    tgt_starts = pool_data['window_starts'][tgt_utt_idx]
-    tgt_ends = pool_data['window_ends'][tgt_utt_idx]
+    ws_start, ws_end = pool_data['utt_boundaries'][tgt_utt_idx]
+    tgt_styles = pool_data['styles'][ws_start:ws_end]
+    tgt_starts = pool_data['window_starts'][ws_start:ws_end]
+    tgt_ends = pool_data['window_ends'][ws_start:ws_end]
 
     # Build phone buckets
     phone_buckets = {}
     for i, (s, e) in enumerate(zip(tgt_starts, tgt_ends)):
         ph = tgt_phones[s:e]
-        dom_ph = int(ph[ph != 0].mode()[0]) if (ph != 0).any() else 0
+        ph_voiced = ph[ph != 0]
+        if len(ph_voiced) > 0:
+            dom_ph = int(np.bincount(ph_voiced).argmax())
+        else:
+            dom_ph = 0
         if dom_ph not in phone_buckets:
             phone_buckets[dom_ph] = []
         phone_buckets[dom_ph].append(i)
@@ -233,7 +240,11 @@ def anonymize_window_guided(source, target_idx, target_pool, phone_predictor, al
         source['style_windows'], source['win_starts'], source['win_ends']
     )):
         src_ph = source['phones'][s:e]
-        dom_ph = int(src_ph[src_ph != 0].mode()[0]) if (src_ph != 0).any() else 0
+        src_ph_voiced = src_ph[src_ph != 0]
+        if len(src_ph_voiced) > 0:
+            dom_ph = int(np.bincount(src_ph_voiced).argmax())
+        else:
+            dom_ph = 0
 
         # Get candidates
         if dom_ph in phone_buckets:
@@ -263,9 +274,22 @@ def anonymize_window_guided(source, target_idx, target_pool, phone_predictor, al
                 best_sim = combined
                 best_idx = c
 
-        # Copy matched features
+        # Copy matched features with length adjustment
         ts, te = tgt_starts[best_idx], tgt_ends[best_idx]
-        h_anon[s:e] = tgt_feats_t[ts:te]
+        tgt_seg = tgt_feats_t[ts:te]
+        src_len = e - s
+        tgt_len = te - ts
+
+        if src_len == tgt_len:
+            h_anon[s:e] = tgt_seg
+        else:
+            # Interpolate to match source length
+            tgt_seg_np = tgt_seg.cpu().numpy()
+            from scipy.interpolate import interp1d
+            x_tgt = np.linspace(0, 1, tgt_len)
+            x_src = np.linspace(0, 1, src_len)
+            interp_func = interp1d(x_tgt, tgt_seg_np, axis=0, kind='linear')
+            h_anon[s:e] = torch.from_numpy(interp_func(x_src)).float().to(device)
 
     print(f"✓ Anonymization complete")
     return h_anon.cpu().numpy()

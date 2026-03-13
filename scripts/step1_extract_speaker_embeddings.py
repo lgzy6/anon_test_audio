@@ -84,6 +84,8 @@ def main():
                         help='PCA output dimension (default: 128)')
     parser.add_argument('--device', type=str, default='cuda',
                         help='Device (cuda/cpu)')
+    parser.add_argument('--sample-ratio', type=float, default=1.0,
+                        help='Sample ratio (0.0-1.0, default: 1.0 for full dataset)')
     args = parser.parse_args()
 
     device = args.device if torch.cuda.is_available() else 'cpu'
@@ -117,7 +119,17 @@ def main():
         metadata = json.load(f)
 
     utterances = metadata['utterances']
-    print(f"Metadata: {len(utterances)} utterances, {metadata['total_frames']} frames")
+
+    # 采样
+    if args.sample_ratio < 1.0:
+        import random
+        random.seed(42)
+        sample_size = int(len(utterances) * args.sample_ratio)
+        sampled_indices = sorted(random.sample(range(len(utterances)), sample_size))
+        utterances = [utterances[i] for i in sampled_indices]
+        print(f"Sampled {len(utterances)}/{len(metadata['utterances'])} utterances (ratio={args.sample_ratio})")
+
+    print(f"Processing: {len(utterances)} utterances")
 
     # === 加载 ECAPA-TDNN ===
     print("\nLoading ECAPA-TDNN speaker encoder...")

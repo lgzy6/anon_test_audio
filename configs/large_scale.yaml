@@ -1,45 +1,34 @@
-# configs/base.yaml
+# configs/large_scale.yaml
 # =============================================================================
-# SAMM-Anon 基础配置文件 (Segment 方案)
+# SAMM-Anon 大规模数据集配置 (Segment 方案)
 # =============================================================================
-# 适用于: Eta-WavLM + Segment Style Extractor 架构
-# 训练流程: Step 1-5 (特征提取 → 风格预计算)
-# 测试流程: Step 6 (风格引导检索)
-#
-# 维度变化说明:
-#   Step 1: ECAPA-TDNN (192维) → PCA → 128维 speaker embedding
-#   Step 2: η = s(1024维) - (d_128 @ A_star + b_star) → η(1024维)
-#   Step 4: segment stats (4096维) → PCA → 64维 style vector
-#   Step 5: utterance style = avg(segment styles) → 64维
-#   Step 6: 使用 64维 style vector 进行检索
+# 用途: 从小规模(43说话人)切换到大规模数据集
+# 流程: run_offline step1 → segment step1-5 → 去匿名生成
 # =============================================================================
 
 # -----------------------------------------------------------------------------
 # 路径配置
 # -----------------------------------------------------------------------------
 paths:
-  # 数据集
+  # 大规模数据集路径
   librispeech_root: "/root/autodl-tmp/datasets/LibriSpeech"
 
   # 预训练模型
   wavlm_checkpoint: "./checkpoints/WavLM-Large.pt"
   ecapa_checkpoint: "speechbrain/spkrec-ecapa-voxceleb"
 
-  # 缓存与输出
-  cache_dir: "./cache"
-  checkpoints_dir: "./checkpoints"
-  output_dir: "./outputs"
-  log_dir: "./logs"
+  # 缓存与输出 - 大规模数据集专用目录
+  cache_dir: "./cache/large"
+  checkpoints_dir: "./checkpoints/large"
+  output_dir: "./outputs/large"
+  log_dir: "./logs/large"
 
 # -----------------------------------------------------------------------------
 # WavLM 配置
 # -----------------------------------------------------------------------------
 ssl:
   model: "wavlm-large"
-  layer: 6                     # 默认层（向后兼容）
-  layers: [6, 24]              # 多层提取：Layer 6用于VC, Layer 24用于phone
-  layer_vc: 6
-  layer_phone: 24
+  layer: 15
   hidden_dim: 1024
   hop_size: 320
   sample_rate: 16000
@@ -48,22 +37,17 @@ ssl:
 # Eta-WavLM 配置
 # -----------------------------------------------------------------------------
 eta_wavlm:
-  # Speaker embedding
   speaker_encoder: "speechbrain/spkrec-ecapa-voxceleb"
-  speaker_dim: 192             # ECAPA-TDNN 原始输出维度
-  pca_dim: 128                 # PCA 降维目标 (用于 Eta 投影)
-
-  # Eta 投影
-  projection_type: "linear"    # 线性投影 A*d + b
-  regularization: 1.0e-6       # 正则化系数
-  # A_star: (128, 1024), b_star: (1024,)
-  # η = s - (d_128 @ A_star + b_star)
+  speaker_dim: 192
+  pca_dim: 128
+  projection_type: "linear"
+  regularization: 1.0e-6
 
 # -----------------------------------------------------------------------------
 # Phone Predictor 配置
 # -----------------------------------------------------------------------------
 phone_predictor:
-  num_phones: 41               # 音素数量
+  num_phones: 41
   hidden_dim: 256
   num_layers: 2
   checkpoint: "./checkpoints/phone_decoder.pt"
@@ -72,53 +56,48 @@ phone_predictor:
 # Segment Style Extractor 配置
 # -----------------------------------------------------------------------------
 style_extractor:
-  segment_type: "phone"        # phone-based segmentation
-  min_segment_frames: 3        # 最小段长度
-
-  # 原始特征维度
-  raw_dim: 4096                # 4 × 1024 = [mean, std, delta_mean, delta_std]
-
-  # PCA 降维
-  pca_dim: 64                  # 风格向量维度 (segment/utterance level)
-
-  # 段级特征
+  segment_type: "phone"
+  min_segment_frames: 3
+  raw_dim: 4096
+  pca_dim: 64
   features:
-    - "mean"                   # mean(η)
-    - "std"                    # std(η)
-    - "delta_abs_mean"         # mean(|Δη|)
-    - "delta_std"              # std(Δη)
+    - "mean"
+    - "std"
+    - "delta_abs_mean"
+    - "delta_std"
 
 # -----------------------------------------------------------------------------
-# Offline 训练配置
+# Offline 训练配置 - 大规模数据集
 # -----------------------------------------------------------------------------
 offline:
-  # 数据集
-  train_split: "train-clean-360"
+  # 使用大规模数据集
+  train_split: "train-clean-360"  # 或 "train-other-500"
   test_split: "test-clean"
 
-  # Step 1: 特征提取
+  # Step 1: 特征提取 (run_offline)
   feature_extraction:
-    max_utterances: 5000       # 提取话语数
+    max_utterances: null  # 使用全部数据
     batch_size: 8
     num_workers: 4
+    max_audio_length: 480000  # 最大30秒音频 (16000*30)
 
   # Step 2: Eta 投影训练
   eta_training:
-    max_frames: null           # null = 使用全部数据
+    max_frames: null
     learning_rate: 0.001
     num_epochs: 10
 
   # Step 3: Phone Predictor 训练
   phone_training:
-    max_utterances: 5000
+    max_utterances: null  # 使用全部数据
     batch_size: 32
     learning_rate: 0.001
     num_epochs: 20
 
   # Step 4: Style Extractor 训练
   style_training:
-    max_frames: null           # null = 使用全部数据
-    max_segments: null         # null = 使用全部段
+    max_frames: null
+    max_segments: null
 
   # Step 5: 预计算话语风格
   style_precompute:
@@ -128,20 +107,13 @@ offline:
 # Step 6: 风格引导检索配置
 # -----------------------------------------------------------------------------
 retrieval:
-  # 系统模式
-  system: "B"                  # A=baseline, B=proposed, C=transfer
-
-  # 检索约束
-  use_phone_constraint: true   # Phone-constrained kNN
-  use_gender_constraint: true  # 同性别检索
-  use_speaker_constraint: true # 不同说话人
-
-  # kNN 参数
-  top_k: 1                     # Top-k 检索
-  similarity_metric: "cosine"  # cosine / l2
-
-  # 风格权重
-  style_weight: 1.0            # 风格相似度权重
+  system: "B"
+  use_phone_constraint: true
+  use_gender_constraint: true
+  use_speaker_constraint: true
+  top_k: 1
+  similarity_metric: "cosine"
+  style_weight: 1.0
 
 # -----------------------------------------------------------------------------
 # 计算资源配置

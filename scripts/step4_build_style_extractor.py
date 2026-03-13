@@ -88,33 +88,37 @@ class SegmentStyleExtractor:
         return np.concatenate([mu, sigma, delta_mu])  # 3072 维
     
     def fit(self, eta_frames, phones_all, max_segments=50000):
-        """在训练集上拟合 PCA"""
-        print("[Step 4] Fitting SegmentStyleExtractor...")
-        
-        segments = self._find_phone_segments(phones_all)
-        print(f"  Total segments found: {len(segments)}")
-        
-        if len(segments) > max_segments:
-            idx = np.random.choice(len(segments), max_segments, replace=False)
-            segments = [segments[i] for i in sorted(idx)]
-        
-        raw_embs = []
-        for start, end, phone_id in tqdm(segments, desc="Building segment embeddings"):
-            emb = self._segment_to_raw_embedding(eta_frames[start:end])
-            raw_embs.append(emb)
-        
-        raw_embs = np.stack(raw_embs)
-        raw_embs = normalize(raw_embs)  # L2 归一化
-        
-        actual_dim = min(self.pca_dim, raw_embs.shape[1], len(raw_embs) - 1)
-        self.pca = PCA(n_components=actual_dim, random_state=42)
-        self.pca.fit(raw_embs)
+        """旧版 fit（已弃用）"""
+        raise NotImplementedError("Use fit_incremental() for large datasets")
+
+    def fit_incremental(self, eta_iterator, batch_size=1000, pca_dim=64):
+        """使用 IncrementalPCA 增量拟合，100% 数据覆盖"""
+        from sklearn.decomposition import IncrementalPCA
+
+        print("[Step 4] Fitting with IncrementalPCA (100% coverage)...")
+
+        self.pca = IncrementalPCA(n_components=pca_dim, batch_size=batch_size)
+        batch = []
+        total_segs = 0
+
+        for eta_utt, phones_utt, _ in tqdm(eta_iterator, desc="Incremental PCA"):
+            segments = self._find_phone_segments(phones_utt)
+
+            for start, end, _ in segments:
+                raw_emb = self._segment_to_raw_embedding(eta_utt[start:end])
+                raw_emb_norm = normalize(raw_emb.reshape(1, -1))[0]
+                batch.append(raw_emb_norm)
+                total_segs += 1
+
+                if len(batch) >= batch_size:
+                    self.pca.partial_fit(np.array(batch))
+                    batch = []
+
+        if batch:
+            self.pca.partial_fit(np.array(batch))
+
         self.fitted = True
-        
-        explained = self.pca.explained_variance_ratio_.sum()
-        print(f"  Raw dim: {raw_embs.shape[1]} → PCA dim: {actual_dim}")
-        print(f"  Explained variance: {explained:.2%}")
-        
+        print(f"  Fitted on {total_segs} segments, PCA dim: {pca_dim}")
         return self
     
     def extract_segment_styles(self, eta_utt, phones_utt):
@@ -167,12 +171,69 @@ class SegmentStyleExtractor:
         return obj
 
 
-def validate_segment_clustering(style_extractor, eta_all, phones_all, 
+def validate_incremental(extractor, eta_iterator, output_dir, max_samples=10000):
+    """增量验证：采样验证聚类质量"""
+    print("\n[Validation] Sampling segments for validation...")
+
+    seg_embs = []
+    seg_spks = []
+
+    for eta, phones, spk_id in tqdm(eta_iterator, desc="Sampling"):
+        seg_results = extractor.extract_segment_styles(eta, phones)
+        for seg in seg_results:
+            seg_embs.append(seg['style_emb'])
+            seg_spks.append(spk_id)
+            if len(seg_embs) >= max_samples:
+                break
+        if len(seg_embs) >= max_samples:
+            break
+
+    seg_embs = np.array(seg_embs)
+    seg_spks = np.array(seg_spks)
+    print(f"  Sampled {len(seg_embs)} segments from {len(np.unique(seg_spks))} speakers")
+
+    # 聚类评估
+    best_k, best_sil = 0, -1
+    for k in [50, 100, 200]:
+        if k >= len(seg_embs):
+            continue
+        kmeans = KMeans(n_clusters=k, random_state=42, n_init=10)
+        labels = kmeans.fit_predict(seg_embs)
+        sil = silhouette_score(seg_embs, labels, sample_size=min(5000, len(seg_embs)))
+        print(f"  K={k}: Silhouette={sil:.4f}")
+        if sil > best_sil:
+            best_k, best_sil = k, sil
+
+    # 可视化
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    tsne = TSNE(n_components=2, random_state=42, perplexity=min(30, len(seg_embs)//4))
+    embs_2d = tsne.fit_transform(seg_embs[:5000])
+
+    unique_spks = np.unique(seg_spks[:5000])
+    spk_to_idx = {spk: i for i, spk in enumerate(unique_spks)}
+    spk_colors = np.array([spk_to_idx[spk] for spk in seg_spks[:5000]])
+
+    plt.figure(figsize=(10, 8))
+    plt.scatter(embs_2d[:, 0], embs_2d[:, 1], c=spk_colors, cmap='tab20', alpha=0.6, s=10)
+    plt.colorbar(label='Speaker')
+    plt.title(f'Segment Styles (K={best_k}, Sil={best_sil:.3f})')
+    plt.savefig(output_dir / 'segment_clustering.png', dpi=150, bbox_inches='tight')
+    plt.close()
+
+    return {'best_k': best_k, 'best_silhouette': best_sil}
+
+
+def validate_segment_clustering_simple(extractor, raw_features, speaker_labels, phone_labels, output_dir):
+    """旧版验证（已弃用）"""
+    raise NotImplementedError()
+
+
+def validate_segment_clustering(extractor, eta_all, phones_all,
                                  speaker_ids_per_frame, output_dir):
-    """验证段级 embedding 的聚类质量"""
-    print("\n[Validation] Segment-level clustering...")
-    
-    segments = style_extractor._find_phone_segments(phones_all)
+    """旧版验证（已弃用）"""
+    raise NotImplementedError()
     
     seg_embs = []
     seg_spks = []
@@ -245,6 +306,8 @@ def main():
     parser.add_argument('--config', type=str, default=None)
     parser.add_argument('--pca-dim', type=int, default=64)
     parser.add_argument('--max-frames', type=int, default=200000)
+    parser.add_argument('--sample-ratio', type=float, default=1.0,
+                        help='Sample ratio for utterances (0.0-1.0)')
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -278,51 +341,49 @@ def main():
     # Phone predictor
     phone_predictor = PhonePredictor.load(str(ckpt_dir / 'phone_decoder.pt'), device=device)
 
-    # 计算 η 并收集 phone 和 speaker 标签
-    print("\n[1/3] Computing η across utterances...")
-    all_eta, all_phones, all_speakers = [], [], []
-    total_frames = 0
-    
-    with h5py.File(cache_dir / 'features.h5', 'r') as f:
-        features_ds = f['features']
-        for utt_idx, utt in enumerate(tqdm(utterances, desc="Computing η")):
-            if utt_idx not in utt_to_pca:
-                continue
-            pca_idx = utt_to_pca[utt_idx]
-            s_np = features_ds[utt['h5_start_idx']:utt['h5_end_idx']]
-            if len(s_np) == 0:
-                continue
-            
-            s = torch.from_numpy(s_np).float().to(device)
-            d = torch.from_numpy(embeddings_pca[pca_idx]).float().to(device)
-            
-            with torch.no_grad():
-                eta = (s - (d @ A_star + b_star).unsqueeze(0)).cpu().numpy()
-                phones = phone_predictor(s).cpu().numpy()
-            
-            all_eta.append(eta)
-            all_phones.append(phones)
-            all_speakers.append(np.full(len(eta), utt['speaker_id']))
+    # 采样话语索引
+    if args.sample_ratio < 1.0:
+        import random
+        random.seed(42)
+        valid_utts = [i for i in range(len(utterances)) if i in utt_to_pca]
+        sample_size = int(len(valid_utts) * args.sample_ratio)
+        sampled_utts = set(random.sample(valid_utts, sample_size))
+        print(f"Sampled {len(sampled_utts)}/{len(valid_utts)} utterances")
+    else:
+        sampled_utts = None
 
-            total_frames += len(eta)
-    
-    all_eta = np.concatenate(all_eta)
-    all_phones = np.concatenate(all_phones)
-    all_speakers = np.concatenate(all_speakers)
-    print(f"  Total: {len(all_eta)} frames, {len(np.unique(all_speakers))} speakers")
-    
-    # 构建段级风格提取器
-    print("\n[2/3] Fitting SegmentStyleExtractor...")
+    # 生成器：逐话语计算 η
+    def eta_generator():
+        with h5py.File(cache_dir / 'features.h5', 'r') as f:
+            features_ds = f['features']
+            for utt_idx, utt in enumerate(utterances):
+                if utt_idx not in utt_to_pca:
+                    continue
+                if sampled_utts is not None and utt_idx not in sampled_utts:
+                    continue
+                s_np = features_ds[utt['h5_start_idx']:utt['h5_end_idx']]
+                if len(s_np) < 5:
+                    continue
+
+                s = torch.from_numpy(s_np).float().to(device)
+                d = torch.from_numpy(embeddings_pca[utt_to_pca[utt_idx]]).float().to(device)
+
+                with torch.no_grad():
+                    eta = (s - (d @ A_star + b_star).unsqueeze(0)).cpu().numpy()
+                    phones = phone_predictor(s).cpu().numpy()
+
+                yield eta, phones, utt['speaker_id']
+
+    # 使用 IncrementalPCA 拟合
+    print("\n[1/2] Fitting SegmentStyleExtractor (IncrementalPCA)...")
     extractor = SegmentStyleExtractor(pca_dim=args.pca_dim)
-    extractor.fit(all_eta, all_phones)
+    extractor.fit_incremental(eta_generator(), batch_size=1000, pca_dim=args.pca_dim)
     extractor.save(ckpt_dir / 'style_extractor.pkl')
-    
-    # 验证
-    print("\n[3/3] Validating segment clustering...")
+
+    # 验证（采样）
+    print("\n[2/2] Validation (sampled)...")
     output_dir = BASE_DIR / 'outputs' / 'style_analysis'
-    results = validate_segment_clustering(
-        extractor, all_eta, all_phones, all_speakers, output_dir
-    )
+    results = validate_incremental(extractor, eta_generator(), output_dir, max_samples=10000)
     
     print(f"\n{'='*50}")
     print(f"RESULT: Best K={results['best_k']}, Silhouette={results['best_silhouette']:.4f}")

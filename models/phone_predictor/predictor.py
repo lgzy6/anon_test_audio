@@ -77,7 +77,7 @@ class ConvDecoder(nn.Module):
         """
         if self.emb_dim > 0:
             x = self.emb(x)
-        
+
         x = self.conv1(x.transpose(-2, -1)).transpose(-2, -1)
         x = self.dropout1(self.ln1(x))
         x = self.conv2(x.transpose(-2, -1)).transpose(-2, -1)

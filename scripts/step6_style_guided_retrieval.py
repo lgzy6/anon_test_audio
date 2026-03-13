@@ -204,6 +204,7 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default=None)
     parser.add_argument('--test-utt-idx', type=int, default=0, help='测试话语索引')
     parser.add_argument('--mode', type=str, default='preserve', choices=['preserve', 'random'])
     args = parser.parse_args()
@@ -211,7 +212,7 @@ def main():
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
 
     # 加载配置
-    config_path = BASE_DIR / 'configs' / 'base.yaml'
+    config_path = Path(args.config) if args.config else BASE_DIR / 'configs' / 'base.yaml'
     with open(config_path, 'r') as f:
         config = yaml.safe_load(f)
 

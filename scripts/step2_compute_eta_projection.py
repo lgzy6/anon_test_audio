@@ -42,6 +42,8 @@ def main():
                         help='Config YAML path')
     parser.add_argument('--chunk-size', type=int, default=2000,
                         help='Frame chunk size for long utterances (default: 2000)')
+    parser.add_argument('--sample-ratio', type=float, default=1.0,
+                        help='Sample ratio for utterances (0.0-1.0, default: 1.0)')
     args = parser.parse_args()
 
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -103,6 +105,17 @@ def main():
     utt_to_pca_idx = {int(utt_idx): pca_idx
                       for pca_idx, utt_idx in enumerate(utt_indices)}
 
+    # === 采样话语 ===
+    if args.sample_ratio < 1.0:
+        import random
+        random.seed(42)
+        valid_utts = [i for i in range(len(utterances)) if i in utt_to_pca_idx]
+        sample_size = int(len(valid_utts) * args.sample_ratio)
+        sampled_utts = set(random.sample(valid_utts, sample_size))
+        print(f"Sampled {len(sampled_utts)}/{len(valid_utts)} utterances for eta computation")
+    else:
+        sampled_utts = None
+
     # === 加载 phone predictor（用于过滤静音）===
     phone_ckpt = ckpt_dir / 'phone_decoder.pt'
     phone_predictor = None
@@ -119,6 +132,8 @@ def main():
 
         for utt_meta_idx, utt in enumerate(tqdm(utterances, desc="Accumulating")):
             if utt_meta_idx not in utt_to_pca_idx:
+                continue
+            if sampled_utts is not None and utt_meta_idx not in sampled_utts:
                 continue
 
             pca_idx = utt_to_pca_idx[utt_meta_idx]

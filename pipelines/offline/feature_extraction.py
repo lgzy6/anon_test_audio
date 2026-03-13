@@ -69,16 +69,20 @@ class FeatureExtractor:
         max_utterances: Optional[int] = None,
         save_interval: int = 1000,
         resume: bool = True,
+        sample_ratio: float = 1.0,
+        sample_strategy: str = 'uniform',
     ) -> Dict:
         """
         提取整个数据集的特征
-        
+
         Args:
             dataset: LibriSpeech 数据集
             output_dir: 输出目录
             max_utterances: 最大处理数量
             save_interval: 保存 checkpoint 的间隔
             resume: 是否从断点恢复
+            sample_ratio: 采样比例 (0.0-1.0)，1.0表示全量
+            sample_strategy: 采样策略 ('uniform'=均匀, 'speaker_balanced'=按说话人均衡)
         """
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -88,7 +92,14 @@ class FeatureExtractor:
         checkpoint_path = output_dir / "checkpoint.json"
         
         num_utterances = len(dataset) if max_utterances is None else min(len(dataset), max_utterances)
-        
+
+        # 采样索引
+        if sample_ratio < 1.0:
+            sampled_indices = self._sample_indices(dataset, num_utterances, sample_ratio, sample_strategy)
+            logger.info(f"Sampling {len(sampled_indices)}/{num_utterances} utterances (ratio={sample_ratio})")
+        else:
+            sampled_indices = list(range(num_utterances))
+
         # 尝试恢复
         start_idx = 0
         metadata_list: List[UtteranceMetadata] = []
@@ -122,8 +133,8 @@ class FeatureExtractor:
             batch_wavs = []
             batch_infos = []
             
-            pbar = tqdm(range(start_idx, num_utterances), desc="Extracting features", initial=start_idx, total=num_utterances)
-            
+            pbar = tqdm(sampled_indices[start_idx:], desc="Extracting features", initial=start_idx, total=len(sampled_indices))
+
             for idx in pbar:
                 try:
                     item = dataset[idx]
@@ -138,7 +149,7 @@ class FeatureExtractor:
                     })
                     
                     # 批次满了，处理
-                    if len(batch_wavs) >= self.batch_size or idx == num_utterances - 1:
+                    if len(batch_wavs) >= self.batch_size or idx == sampled_indices[-1]:
                         batch_features, batch_lengths = self._extract_batch(batch_wavs)
                         
                         for i, (feats, info) in enumerate(zip(batch_features, batch_infos)):
@@ -238,6 +249,39 @@ class FeatureExtractor:
         
         return results, lengths
 
+    def _sample_indices(self, dataset, num_utterances: int, sample_ratio: float, strategy: str):
+        """采样索引"""
+        import random
+        random.seed(42)
+
+        target_count = int(num_utterances * sample_ratio)
+
+        if strategy == 'uniform':
+            # 均匀采样
+            step = num_utterances / target_count
+            return [int(i * step) for i in range(target_count)]
+
+        elif strategy == 'speaker_balanced':
+            # 按说话人均衡采样
+            speaker_to_indices = {}
+            for idx in range(num_utterances):
+                item = dataset[idx]
+                spk = item['speaker_id']
+                if spk not in speaker_to_indices:
+                    speaker_to_indices[spk] = []
+                speaker_to_indices[spk].append(idx)
+
+            # 每个说话人采样相同数量
+            samples_per_speaker = max(1, target_count // len(speaker_to_indices))
+            sampled = []
+            for indices in speaker_to_indices.values():
+                sampled.extend(random.sample(indices, min(samples_per_speaker, len(indices))))
+
+            return sorted(sampled[:target_count])
+
+        else:
+            raise ValueError(f"Unknown strategy: {strategy}")
+
 
 def run_feature_extraction(config: Dict) -> Dict:
     """运行特征提取"""
@@ -269,6 +313,8 @@ def run_feature_extraction(config: Dict) -> Dict:
         max_utterances=feat_cfg.get('max_utterances'),
         save_interval=feat_cfg.get('save_interval', 1000),
         resume=True,
+        sample_ratio=feat_cfg.get('sample_ratio', 1.0),
+        sample_strategy=feat_cfg.get('sample_strategy', 'uniform'),
     )
 
     return metadata
