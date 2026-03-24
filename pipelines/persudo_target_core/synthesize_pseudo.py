@@ -58,6 +58,7 @@ def extract_source_features(audio_path, models, device='cuda'):
     """提取源音频特征 (仅需 L6 和 Phones)"""
     print(f"\n提取源音频特征: {audio_path}")
     waveform, sr = torchaudio.load(audio_path)
+    
     if sr != 16000:
         waveform = torchaudio.functional.resample(waveform, sr, 16000)
 
@@ -130,7 +131,7 @@ def anonymize_with_duration(source_wavlm, source_phones, models, device='cuda', 
     src_feats_adj = torch.cat(adjusted_feats, dim=0)
     src_phones_adj = torch.cat(adjusted_phones, dim=0)
 
-    # --- 4. Pseudo-Bank Phone-level kNN 匹配 (修复了 Top-K) ---
+    # --- 4. Pseudo-Bank Phone-level kNN 匹配 (排斥 Top-3 + 狄利克雷混合) ---
     h_anon = torch.zeros_like(src_feats_adj)
     unique_phone_ids = torch.unique(src_phones_adj)
 
@@ -138,27 +139,40 @@ def anonymize_with_duration(source_wavlm, source_phones, models, device='cuda', 
         ph_int = int(phone_id.item())
         mask = src_phones_adj == phone_id
         query_batch = src_feats_adj[mask]
-        
+
         # 路由策略：如果音素在 Bank 中，使用对应的桶；否则使用全局后备池
         if ph_int in pseudo_bank:
             tgt_candidates = pseudo_bank[ph_int]
         else:
             tgt_candidates = models['global_fallback']
-            
-        # 计算欧氏距离 (WavLM特征空间通常欧氏距离比余弦表现更稳定)
-        # [N_query, 1, 1024] - [1, N_tgt, 1024] -> [N_query, N_tgt, 1024]
+
+        # 计算欧氏距离
         dists = torch.cdist(query_batch, tgt_candidates) # [N_query, N_tgt]
-        
-        # 获取 Top-K 索引
-        actual_k = min(k, tgt_candidates.shape[0])
-        topk_indices = dists.topk(actual_k, largest=False).indices # [N_query, k]
-        
-        # 提取 K 个候选帧并求均值
-        # tgt_candidates 形状: [N_tgt, 1024] -> expanded: [N_query, k, 1024]
-        matched_k_frames = tgt_candidates[topk_indices]
-        matched_mean = matched_k_frames.mean(dim=1) # [N_query, 1024]
-        
-        h_anon[mask] = matched_mean
+
+        # --- 排斥 Top-3 + Top-20 随机采样 + 狄利克雷混合 ---
+        N_query = query_batch.shape[0]
+        N_tgt = tgt_candidates.shape[0]
+        skip_top = 3
+        pool_size = 20
+        sample_k = k
+        actual_N = min(skip_top + pool_size, N_tgt)
+
+        if actual_N >= skip_top + sample_k:
+            top_n_indices = dists.topk(actual_N, largest=False).indices
+            candidate_indices = top_n_indices[:, skip_top:]
+            rand_idx = torch.randint(0, candidate_indices.shape[1], (N_query, sample_k), device=device)
+            sampled_tgt_indices = torch.gather(candidate_indices, 1, rand_idx)
+            matched_k_frames = tgt_candidates[sampled_tgt_indices]
+
+            alphas = torch.ones(sample_k, device=device)
+            dirichlet_dist = torch.distributions.dirichlet.Dirichlet(alphas)
+            weights = dirichlet_dist.sample((N_query,)).unsqueeze(-1)
+            h_anon[mask] = (matched_k_frames * weights).sum(dim=1)
+        else:
+            actual_k = min(sample_k, N_tgt)
+            topk_indices = dists.topk(actual_k, largest=False).indices
+            matched_k_frames = tgt_candidates[topk_indices]
+            h_anon[mask] = matched_k_frames.mean(dim=1)
 
     print(f"✓ 匿名化完成: 源帧数 {src_feats.shape[0]} -> 目标帧数 {h_anon.shape[0]}")
     return h_anon.cpu().numpy()
