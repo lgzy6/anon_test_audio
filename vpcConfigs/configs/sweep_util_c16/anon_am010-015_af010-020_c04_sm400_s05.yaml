@@ -1,0 +1,51 @@
+data_dir: data
+results_dir: wav
+
+pipeline: 20pool_spnRedirect_alphaGender_sadEnergy
+
+anon_suffix: _unitQuery_c16f20s4_e07_d2_20pool_dynAlpha_sadEnergy_am010-015_af010-020_c04_sm400_s05
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # - name: train-clean-360
+  #   data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same 
+  top_k: 2
+
+  alpha_low_m: 0.10
+  alpha_high_m: 0.15
+  alpha_low_f: 0.10
+  alpha_high_f: 0.20
+
+  enable_spn_redirect: true
+  spn_redirect_quantile: 0.15
+  spn_redirect_alpha: 0.3
+
+  use_adaptive_alpha: false
+  bank_dir: banks_c16f20s4_e07_d2_centroid_sil_20spk
+
+  n_pools: 20
+  dur_weight: 0.0
+  sad_energy:
+    enable: true
+    slope_strength: 0.5   # decrescendo：迁源负斜率的强度
+    compress: 0.4          # 动态压缩：把能量压平（只用匿名自身）
+    max_drop_db: 6.0       # 句首→句尾最大下行，防过度
+    smooth_ms: 400
+    use_gate: false        # 先全句、单变量看 ACC_sad
+  batch_size: 16
+

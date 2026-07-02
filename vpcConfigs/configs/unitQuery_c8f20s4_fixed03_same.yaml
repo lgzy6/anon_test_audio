@@ -1,0 +1,45 @@
+# ═══════════════════════════════════════════════════════════════
+# UnitQuery + 固定 alpha=0.3  (bank: c8f16s4_e10_d3)
+# 目的: 测试强bank条件下 alpha 断崖点位置 (alpha=0.3)
+# 检索策略: unitQuery (pipeline_top3Random_unitQuery)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+
+anon_suffix: _unitQuery_c8f20s4_fixed03_same_dur0.3
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 ──
+  mode: same
+  top_k: 3
+  alpha: 0.3
+  use_adaptive_alpha: false
+
+  # ── Bank 配置 (强bank) ──
+  bank_dir: banks_c8f20s4_e05_d3
+
+  # ── Duration Predictor ──
+  dur_weight: 0.3
+
+  # ── 运行配置 ──
+  batch_size: 16

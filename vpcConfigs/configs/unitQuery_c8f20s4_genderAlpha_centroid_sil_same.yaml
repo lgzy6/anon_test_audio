@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════
+# UnitQuery + 性别自适应 Alpha (bank: centroid_sil c8f20s4)
+# 目的: 针对centroid_sil bank，按性别优化隐私-效用权衡
+#   - 男性: alpha_m=0.2 (cliff 在 0.2-0.3，取 0.2 保安全)
+#   - 女性: alpha_f=0.3 (cliff 在 0.3-0.4，取 0.3 拿效用)
+# 检索策略: unitQuery genderAlpha (pipeline_top3Random_unitQuery_genderAlpha)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_genderAlpha
+
+anon_suffix: _unitQuery_c8f20s4_genderAlpha_centroid_sil_same_dur0
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # - name: train-clean-360
+  #   data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 ──
+  mode: same
+  top_k: 3
+  
+  # ── 性别自适应 Alpha 配置 ──
+  use_gender_alpha: true
+  alpha_m: 0.2    # 男性 cliff 在 0.2-0.3，取 0.2 保安全
+  alpha_f: 0.3    # 女性 cliff 在 0.3-0.4，取 0.3 拿效用
+  
+  use_adaptive_alpha: false
+
+  # ── Bank 配置 (centroid_sil) ──
+  bank_dir: banks_c8f20s4_e05_d3_centroid_sil
+
+  # ── Duration Predictor ──
+  dur_weight: 0
+
+  # ── 运行配置 ──
+  batch_size: 16

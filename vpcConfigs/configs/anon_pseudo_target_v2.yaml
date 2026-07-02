@@ -1,0 +1,31 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_v2
+anon_suffix: _pseudo_target_v2_same
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  data_dir: /root/autodl-tmp/anon_test/checkpoints/trainother500_200spk
+  mode: same           # same / cross / mix
+  dur_weight: 0.3      # 时长匿名化权重
+  top_n: 100           # L24 第一级召回数
+  top_k: 8             # 联合打分后保留数
+  temperature: 0.3     # 提升温度，多帧加权更平滑（降低单帧选择噪声）
+  lambda_id: 0.0       # 关闭身份引导，改为纯音素距离匹配

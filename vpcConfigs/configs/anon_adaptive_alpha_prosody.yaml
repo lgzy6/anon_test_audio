@@ -1,0 +1,32 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+anon_suffix: _adaptive_alpha_prosody_c8f32s8_non_enropy_dur03
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # - name: train-clean-360
+  #   data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: cross
+  top_k: 3
+  alpha: 0.2
+  use_adaptive_alpha: true
+  use_prosody_injection: true
+  prosody_beta: 0.3
+  dur_weight: 0.3
+  batch_size: 16

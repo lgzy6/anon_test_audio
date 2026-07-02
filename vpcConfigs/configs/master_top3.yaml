@@ -1,0 +1,52 @@
+# ═══════════════════════════════════════════════════════════════
+# Master Config — Top3 kNN Adaptive Alpha Pipeline
+# 使用方法: 复制此文件并修改 [OVERRIDE] 标记的参数即可创建新实验
+# 命名规范: anon_{PIPELINE}_{BANK}_{RETRIEVAL}_{EXTRA}.yaml
+#   PIPELINE: top3 / top3rand
+#   BANK:     c{C}f{F}s{S}_e{E}_d{D}  (clusters/frames/sub/entropy/diversity)
+#   RETRIEVAL: adapt / fixed{alpha} / l6only / l24only
+#   EXTRA:    dur{W} / cross / same / ...
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+
+# [OVERRIDE] anon_suffix 应与配置文件名对应
+anon_suffix: _top3_c8f32s8_e10_d3_adapt_same
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # 取消注释以包含训练集(ASR微调等场景)
+  # - name: train-clean-360
+  #   data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 ──
+  mode: same            # [OVERRIDE] same / cross
+  top_k: 3             # Top-K 候选数
+  alpha: 0.2           # 全局 alpha (L6权重)，仅 adaptive=false 时生效
+  use_adaptive_alpha: true  # [OVERRIDE] 音素级自适应 alpha
+
+  # ── Bank 配置 ──
+  bank_dir: banks_v2   # [OVERRIDE] Bank目录名 (相对 checkpoints/)
+                       # 命名规范: banks_c{C}f{F}s{S}_e{E}_d{D}
+
+  # ── Duration Predictor ──
+  dur_weight: 0.0      # [OVERRIDE] 0.0=原始时长, >0=融合预测时长
+
+  # ── 运行配置 ──
+  batch_size: 16       # WavLM batch size (24GB GPU 建议 ≤16)

@@ -1,0 +1,42 @@
+# ═══════════════════════════════════════════════════════════════
+# 实验 B: medoid + 静音桶
+# A→B 的指标差 = 纯「静音建桶」贡献 (候选集类型不变, 都是 medoid)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_genderAlpha
+
+anon_suffix: _unitQuery_c8f20s4_e05_d3_medoid_sil_base_same_dur0
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # 取消注释以包含训练集(ASR微调等场景)
+  # - name: train-clean-360
+  #   data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same
+  top_k: 3
+
+  alpha: 0.0
+  use_gender_alpha: false
+  alpha_m: 0.25
+  alpha_f: 0.3
+
+  use_adaptive_alpha: false
+  bank_dir: banks_c8f20s4_e05_d3_medoid_sil
+  dur_weight: 0.0
+  batch_size: 16

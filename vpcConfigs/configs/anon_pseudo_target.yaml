@@ -1,0 +1,29 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target
+anon_suffix: !ref _<pipeline>
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  bank_male: /root/autodl-tmp/anon_test/checkpoints/trainother500_with_phones/pseudo_bank.gender-m.pt
+  bank_female: /root/autodl-tmp/anon_test/checkpoints/trainother500_with_phones/pseudo_bank.gender-f.pt
+  target_gender: cross  # 'same' (同性别) 或 'cross' (跨性别)
+  k: 4
+  dur_weight: 0.3

@@ -1,0 +1,64 @@
+# ═══════════════════════════════════════════════════════════════
+# Gender-Alpha + PRI (Prosody Residual Injection)
+# 
+# 出发工作点: gender-alpha (EER≈50, WER≈6.25, UAR≈38)
+# 目标: 通过 PRI 将 UAR 从 38 推到 42+, 不显著伤 EER/WER
+#
+# PRI 原理:
+#   h_final[t] = h_anon[t] + γ · (src_l6[t] - phone_mean)
+#   残差编码帧级韵律动态（能量变化、频谱倾斜）
+#   残差不含说话人身份（被 phone_mean 吸收）
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_genderAlpha_PRI
+
+anon_suffix: _genderAlpha_PRI_gamma03_centroid_sil_same_dur0
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # 取消注释以包含训练集(ASR微调等场景)
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 ──
+  mode: same
+  top_k: 3
+
+  # ── 性别自适应 Alpha ──
+  use_gender_alpha: true
+  alpha_m: 0.2
+  alpha_f: 0.3
+
+  use_adaptive_alpha: false
+
+  # ── PRI (Prosody Residual Injection) ──
+  # γ 扫描建议: 0.1, 0.3, 0.5
+  # γ=0.0 等价于关闭 PRI（原始检索）
+  # γ=0.3 是推荐起点
+  prosody_gamma: 0.3
+
+  # ── Bank 配置 ──
+  # 注意: 必须用 centroid_sil 版本（有静音桶）
+  bank_dir: banks_c8f20s4_e05_d3_centroid_sil
+
+  # ── Duration ──
+  dur_weight: 0
+
+  # ── 运行配置 ──
+  batch_size: 16

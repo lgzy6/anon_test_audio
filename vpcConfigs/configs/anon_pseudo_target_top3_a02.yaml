@@ -1,0 +1,29 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+anon_suffix: _top3_cosine_same_a02
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same
+  dur_weight: 0.3
+  batch_size: 8
+  alpha: 0.2
+  top_k: 3

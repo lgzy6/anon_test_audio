@@ -1,0 +1,49 @@
+# ═══════════════════════════════════════════════════════════════
+# TwoStage 两阶段检索 + 固定 alpha=0.2  (bank: c8f20s4_e10_d3)
+# 目的: 验证两阶段检索策略的隐私-效用平衡
+# 检索策略:
+#   Stage 1: α=0.2 混合距离选 top-15 候选 (隐私筛选, 偏L24排除近邻)
+#   Stage 2: 在15个已通过隐私筛选的候选中, 按L6距离重排选top-3 (效用保真)
+#   最后随机取1 (增加不确定性)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_twoStage
+
+anon_suffix: _twoStage_c8f20s4_fixed02_same_dur0.3
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 (两阶段) ──
+  mode: same
+  screen_k: 15       # Stage 1: 混合距离筛选候选数
+  top_k: 3           # Stage 2: L6重排后最终候选数
+  alpha: 0.2         # Stage 1 混合距离权重 (L6占比)
+  use_adaptive_alpha: false
+
+  # ── Bank 配置 (强隐私bank) ──
+  bank_dir: banks_c8f20s4_e05_d3
+
+  # ── Duration Predictor ──
+  dur_weight: 0.3
+
+  # ── 运行配置 ──
+  batch_size: 16

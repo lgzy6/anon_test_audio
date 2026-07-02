@@ -1,0 +1,20 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+
+anon_suffix: _randomTop3_c8f16s4_e10_d3_fix_same_dur0.3
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same
+  top_k: 3
+  alpha: 1.0
+  use_adaptive_alpha: false
+  bank_dir: banks_c8f16s4_e10_d3_adapt_same
+  dur_weight: 0.3
+  batch_size: 16

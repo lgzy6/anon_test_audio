@@ -1,0 +1,30 @@
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_v3
+anon_suffix: _global_phonetic_l24query_l6synth_same
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same           # same / cross / mix
+  use_adain: true
+  dur_weight: 0.3
+  batch_size: 8
+  alpha: 0
+  top_k: 4

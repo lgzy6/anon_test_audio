@@ -1,0 +1,44 @@
+# ═══════════════════════════════════════════════════════════════
+# centroid_sil bank: banks_c8f20s4_e05_d3_centroid_sil
+# Pipeline: pseudo_target_top3 (正常全局回退)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+
+anon_suffix: _centroid_sil_c8f20s4_fixed02_same
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略: 固定alpha=0.2 (偏L24检索, 强隐私) ──
+  mode: same
+  top_k: 3
+  alpha: 0.2
+  use_adaptive_alpha: false
+
+  # ── Bank: centroid_sil ──
+  bank_dir: banks_c8f20s4_e05_d3_centroid_sil
+
+  # ── Duration Predictor ──
+  dur_weight: 0.3
+
+  # ── 运行配置 ──
+  batch_size: 16

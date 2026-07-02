@@ -1,0 +1,51 @@
+# ═══════════════════════════════════════════════════════════════
+# SilenceNoise + 固定 alpha=0.2  (bank: c8f16s4_e10_d3)
+# 目的: 验证静音帧加噪声策略防止身份指纹泄漏的效果
+# 检索策略: silenceNoise (静音帧回退源帧+加噪声, 非静音帧正常bank检索)
+# 参数: silence_noise_sigma 控制噪声强度
+#       0.0 = 不做静音回退（走正常bank检索）
+#       >0  = 静音帧回退源帧+加噪声（掩盖身份指纹）
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_silenceNoise
+
+anon_suffix: _silenceNoise_c8f16s4_fixed02_same_dur0.3
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 ──
+  mode: same
+  top_k: 3
+  alpha: 0.2
+  use_adaptive_alpha: false
+
+  # ── 静音帧噪声策略 ──
+  silence_noise_sigma: 0.1
+
+  # ── Bank 配置 (强bank) ──
+  bank_dir: banks_c8f16s4_e10_d3
+
+  # ── Duration Predictor ──
+  dur_weight: 0.3
+
+  # ── 运行配置 ──
+  batch_size: 16

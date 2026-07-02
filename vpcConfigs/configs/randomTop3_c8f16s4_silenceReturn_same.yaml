@@ -1,0 +1,46 @@
+# ═══════════════════════════════════════════════════════════════
+# 消融实验B: SilenceReturn Pipeline vs 基线 Pipeline
+# 目的: 验证静音帧保留源L6策略对 WER/UAR 的影响
+# 基线: randomTop3_c8f16s4_e10_d3_fix_same (pseudo_target_top3)
+# 变量: pipeline 从 pseudo_target_top3 → pseudo_target_top3_silenceNoise
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3_silenceNoise
+
+anon_suffix: _randomTop3_c8f16s4_silenceReturn_same_dur0.3
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+
+  # ── 检索策略 (同基线) ──
+  mode: same
+  top_k: 3
+  alpha: 1.0
+  use_adaptive_alpha: false
+
+  # ── Bank 配置: 同基线 centroid bank ──
+  bank_dir: banks_c8f16s4_e10_d3
+
+  # ── Duration Predictor (同基线) ──
+  dur_weight: 0.3
+
+  # ── 运行配置 ──
+  batch_size: 16

@@ -1,0 +1,37 @@
+# ═══════════════════════════════════════════════════════════════
+# 实验 C: 帧池 + 静音桶
+# B→C 的指标差 = 纯「帧池化/流形性」贡献 (都有静音桶, 候选集 medoid→帧池)
+# ═══════════════════════════════════════════════════════════════
+data_dir: data
+results_dir: wav
+
+pipeline: pseudo_target_top3
+
+anon_suffix: _bankABC_C_pool_sil
+
+datasets:
+  - name: IEMOCAP_dev
+    data: IEMOCAP_dev
+  - name: IEMOCAP_test
+    data: IEMOCAP_test
+  - name: libri_dev
+    data: libri_dev
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  - name: libri_test
+    data: libri_test
+    enrolls: [_enrolls]
+    trials: [_trials_f, _trials_m]
+  # 取消注释以包含训练集(ASR微调等场景)
+  - name: train-clean-360
+    data: train-clean-360
+
+modules:
+  anon_suffix: !ref <anon_suffix>
+  mode: same
+  top_k: 3
+  alpha: 0.5
+  use_adaptive_alpha: false
+  bank_dir: banks_c8n16_e10_d5_pool_sil
+  dur_weight: 0.0
+  batch_size: 16
