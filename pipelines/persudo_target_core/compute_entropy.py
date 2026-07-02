@@ -12,39 +12,31 @@ from collections import defaultdict
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Compute confusion entropy for L12 features")
     parser.add_argument('--data-dir', default="/root/autodl-tmp/anon_test/checkpoints/trainother500_with_phones")
-    parser.add_argument('--output', default=None, help="输出熵文件路径，默认按标签自动命名")
-    parser.add_argument('--gender', default=None, help="按性别过滤 (e.g., m/f/unknown)")
-    parser.add_argument('--emotion', default=None, help="按情绪过滤 (e.g., neutral/happy/unknown)")
+    parser.add_argument('--output', default=None)
+    parser.add_argument('--gender', default=None, help="m/f，不传则批量处理男女")
     parser.add_argument('--temperature', type=float, default=10.0)
     parser.add_argument('--min-speakers', type=int, default=3)
     return parser.parse_args()
 
 
-def pick_entropy_path(data_dir: str, gender: str | None, emotion: str | None, output: str | None) -> str:
+def pick_entropy_path(data_dir: str, gender: str | None, output: str | None) -> str:
     if output:
         return output
-    if not gender and not emotion:
+    if not gender:
         return f"{data_dir}/entropies.h5"
-    suffix = []
-    if gender:
-        suffix.append(f"gender-{gender}")
-    if emotion:
-        suffix.append(f"emotion-{emotion}")
-    suffix_str = '.'.join(suffix)
-    return f"{data_dir}/entropies.{suffix_str}.h5"
+    return f"{data_dir}/entropies.gender-{gender}.h5"
 
 
-def main() -> None:
-    args = parse_args()
-
-    data_dir = args.data_dir
+def compute_entropy_for_gender(data_dir: str, gender: str | None,
+                               output: str | None, temperature: float, min_speakers: int) -> None:
+    """为单个性别计算混合熵"""
     meta_path = f"{data_dir}/metadata.json"
     l12_path = f"{data_dir}/layer_12.h5"
     phone_path = f"{data_dir}/phones.h5"
-    output_entropy_path = pick_entropy_path(data_dir, args.gender, args.emotion, args.output)
+    output_entropy_path = pick_entropy_path(data_dir, gender, output)
 
     print("=" * 60)
-    print("Step 1: 计算音素内说话人嵌入 (Centroids)")
+    print(f"计算混合熵 - 性别: {gender or 'all'}")
     print("=" * 60)
 
     with open(meta_path, 'r') as f:
@@ -52,9 +44,7 @@ def main() -> None:
     utterances = meta['utterances']
 
     def match_labels(utt: dict) -> bool:
-        if args.gender and utt.get('gender', 'unknown') != args.gender:
-            return False
-        if args.emotion and utt.get('emotion', 'unknown') != args.emotion:
+        if gender and utt.get('gender', 'unknown') != gender:
             return False
         return True
 
@@ -89,8 +79,8 @@ def main() -> None:
             if count >= 3:
                 phone_spk_embs[ph][spk] = feat_sum / count
 
-    valid_phones = {ph: embs for ph, embs in phone_spk_embs.items() if len(embs) >= args.min_speakers}
-    print(f"有效音素数量: {len(valid_phones)} (要求每音素至少包含 {args.min_speakers} 个说话人)")
+    valid_phones = {ph: embs for ph, embs in phone_spk_embs.items() if len(embs) >= min_speakers}
+    print(f"有效音素数量: {len(valid_phones)} (要求每音素至少包含 {min_speakers} 个说话人)")
 
     print("\n" + "=" * 60)
     print("Step 2: 计算每帧的混淆熵并存入 HDF5")
@@ -132,7 +122,7 @@ def main() -> None:
                 ph_l12_norm = ph_l12 / (np.linalg.norm(ph_l12, axis=1, keepdims=True) + 1e-8)
                 sims = ph_l12_norm @ emb_norms.T  # [N, N_spk]
 
-                scaled_sims = sims * args.temperature
+                scaled_sims = sims * temperature
                 max_sims = np.max(scaled_sims, axis=1, keepdims=True)
                 exp_sims = np.exp(scaled_sims - max_sims)
                 probs = exp_sims / np.sum(exp_sims, axis=1, keepdims=True)
@@ -151,6 +141,18 @@ def main() -> None:
     print(f"完成！混淆熵已写入: {output_entropy_path}")
     print(f"总帧数: {total_frames}, 成功计算熵的帧数: {valid_count} ({valid_count/total_frames:.1%})")
     print("=" * 60)
+
+
+def main() -> None:
+    args = parse_args()
+
+    # 未指定性别则批量处理男女，指定则单次处理
+    genders = ['m', 'f'] if args.gender is None else [args.gender]
+    for gender in genders:
+        compute_entropy_for_gender(
+            args.data_dir, gender, args.output,
+            args.temperature, args.min_speakers
+        )
 
 
 if __name__ == "__main__":

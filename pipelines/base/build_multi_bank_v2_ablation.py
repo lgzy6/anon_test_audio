@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Bank 构建 v2:
-  L24 K-Means(8簇)，混淆熵用 L24 计算，动态 top-p% 过滤
+Bank 构建 v2 消融版:
+  L24 K-Means(8簇)，混淆熵用 L6 计算（消融），动态 top-p% 过滤
   每个通过过滤的簇取最近 frames_per_cluster 帧做二次 K-Means(sub_clusters)
   保存二次聚类质心：L24 质心 + 对应子簇 L6 均值
 """
@@ -19,17 +19,16 @@ from sklearn.cluster import MiniBatchKMeans, KMeans
 from tqdm import tqdm
 
 CKPT_DIR  = Path("/root/autodl-tmp/anon_test/checkpoints")
-# BANKS_DIR 由 main() 根据参数动态生成，格式: banks_c{C}f{F}s{S}_e{E}_d{D}
-BANKS_DIR = None  # 延迟初始化
+BANKS_DIR = CKPT_DIR / "banks_v2_ablation"
 
 
-def _cluster_entropy(l24_frames: np.ndarray, spk_ids: np.ndarray, temperature: float = 5.0) -> float:
+def _cluster_entropy(l6_frames: np.ndarray, spk_ids: np.ndarray, temperature: float = 5.0) -> float:
     unique_spks = np.unique(spk_ids)
     if len(unique_spks) < 2:
         return 0.0
-    spk_embs = np.stack([l24_frames[spk_ids == s].mean(0) for s in unique_spks])
+    spk_embs = np.stack([l6_frames[spk_ids == s].mean(0) for s in unique_spks])
     spk_embs = spk_embs / (np.linalg.norm(spk_embs, axis=1, keepdims=True) + 1e-8)
-    frames_norm = l24_frames / (np.linalg.norm(l24_frames, axis=1, keepdims=True) + 1e-8)
+    frames_norm = l6_frames / (np.linalg.norm(l6_frames, axis=1, keepdims=True) + 1e-8)
     sims = frames_norm @ spk_embs.T * temperature
     sims -= sims.max(axis=1, keepdims=True)
     exp_s = np.exp(sims)
@@ -39,13 +38,10 @@ def _cluster_entropy(l24_frames: np.ndarray, spk_ids: np.ndarray, temperature: f
 
 
 def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20, sub_clusters=4,
-               min_spk_diversity=3, entropy_top_p=0.5, chunk_size=200_000, silence_phones=(0,),
-               banks_dir=None):
+               min_spk_diversity=3, entropy_top_p=0.5, chunk_size=200_000, silence_phones=(0,)):
     data_dir = Path(data_dir)
-    if banks_dir is None:
-        banks_dir = CKPT_DIR / "banks_v2"
-    banks_dir.mkdir(parents=True, exist_ok=True)
-    out_path = banks_dir / f"pool_{pool_id}_gender-{gender_tag}.pt"
+    BANKS_DIR.mkdir(parents=True, exist_ok=True)
+    out_path = BANKS_DIR / f"pool_{pool_id}_gender-{gender_tag}.pt"
 
     with open(data_dir / "metadata.json") as f:
         meta = json.load(f)
@@ -102,10 +98,7 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
 
         n, k = len(l24_all), min(clusters, len(l24_all))
         if n < k:
-            bank[ph] = {
-                "l6":  torch.from_numpy(l6_all.mean(0, keepdims=True)).float(),
-                "l24": torch.from_numpy(l24_all.mean(0, keepdims=True)).float(),
-            }
+            bank[ph] = {"l6": torch.from_numpy(l6_all.mean(0, keepdims=True)).float()}
             continue
 
         km1 = MiniBatchKMeans(n_clusters=k, random_state=42, batch_size=2048)
@@ -118,41 +111,39 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
                 continue
             if len(np.unique(spk_all[cm])) < min_spk_diversity:
                 continue
-            entropies.append(_cluster_entropy(l24_all[cm], spk_all[cm]))
+            entropies.append(_cluster_entropy(l6_all[cm], spk_all[cm]))
             valid_clusters.append(c)
 
-        centroids_l6, centroids_l24 = [], []
+        centroids_l6 = []
         if valid_clusters:
             threshold = np.percentile(entropies, (1 - entropy_top_p) * 100)
             for c, ent in zip(valid_clusters, entropies):
                 if ent < threshold:
                     continue
                 cm = km1.labels_ == c
-                dists = np.linalg.norm(l24_all[cm] - km1.cluster_centers_[c], axis=1)
-                n_sel = min(frames_per_cluster, int(cm.sum()))
-                top_local = dists.argsort()[:n_sel]
-                cluster_global = np.where(cm)[0][top_local]
-                cand_l6  = l6_all[cluster_global]
-                cand_l24 = l24_all[cluster_global]
+                # 保存所有帧做二次聚类
+                cand_l6  = l6_all[cm]
+                cand_l24 = l24_all[cm]
 
                 k2 = min(sub_clusters, len(cand_l24))
                 if len(cand_l24) <= k2:
-                    centroids_l24.append(cand_l24)
-                    centroids_l6.append(cand_l6)
+                    centroids_l6.append(cand_l6.mean(0, keepdims=True))
                 else:
                     km2 = KMeans(n_clusters=k2, random_state=42, n_init='auto')
                     km2.fit(cand_l24)
-                    centroids_l24.append(km2.cluster_centers_.astype(np.float32))
-                    centroids_l6.append(np.stack([
-                        cand_l6[km2.labels_ == sc].mean(0)
-                        for sc in range(k2) if np.any(km2.labels_ == sc)
-                    ]))
+                    for sc in range(k2):
+                        sc_mask = km2.labels_ == sc
+                        if not np.any(sc_mask):
+                            continue
+                        sc_l24 = cand_l24[sc_mask]
+                        sc_l6  = cand_l6[sc_mask]
+                        dists = np.linalg.norm(sc_l24 - km2.cluster_centers_[sc], axis=1)
+                        n_near = min(5, len(sc_l24))
+                        top5 = dists.argsort()[:n_near]
+                        centroids_l6.append(sc_l6[top5].mean(0, keepdims=True))
 
-        if centroids_l24:
-            bank[ph] = {
-                "l6":  torch.from_numpy(np.concatenate(centroids_l6)).float(),
-                "l24": torch.from_numpy(np.concatenate(centroids_l24)).float(),
-            }
+        if centroids_l6:
+            bank[ph] = {"l6": torch.from_numpy(np.concatenate(centroids_l6)).float()}
         del l6_all, l24_all, spk_all
 
     del l6_buckets, l24_buckets, spk_buckets
@@ -166,24 +157,12 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pool", type=int, default=None)
-    parser.add_argument("--clusters", "-c", type=int, default=8)
-    parser.add_argument("--frames-per-cluster", "-f", type=int, default=20)
-    parser.add_argument("--sub-clusters", "-s", type=int, default=4)
-    parser.add_argument("--min-spk-diversity", "-d", type=int, default=3)
-    parser.add_argument("--entropy-top-p", "-e", type=float, default=0.5)
-    parser.add_argument("--bank-dir", type=str, default=None,
-                        help="自定义输出目录名(相对checkpoints), 默认自动生成: banks_c{C}f{F}s{S}_e{E}_d{D}")
+    parser.add_argument("--clusters", type=int, default=8)
+    parser.add_argument("--frames-per-cluster", type=int, default=20)
+    parser.add_argument("--sub-clusters", type=int, default=4)
+    parser.add_argument("--min-spk-diversity", type=int, default=3)
+    parser.add_argument("--entropy-top-p", type=float, default=0.5)
     args = parser.parse_args()
-
-    # 自动生成 bank 目录名: banks_c{C}f{F}s{S}_e{E}_d{D}
-    if args.bank_dir:
-        banks_dir = CKPT_DIR / args.bank_dir
-    else:
-        e_str = f"{args.entropy_top_p:.1f}".replace(".", "")
-        dir_name = f"banks_c{args.clusters}f{args.frames_per_cluster}s{args.sub_clusters}_e{e_str}_d{args.min_spk_diversity}"
-        banks_dir = CKPT_DIR / dir_name
-
-    print(f"Bank 输出目录: {banks_dir}")
 
     pool_ids = [args.pool] if args.pool is not None else range(4)
     for pid in pool_ids:
@@ -195,8 +174,7 @@ def main():
                 continue
             print(f"  [{gender}]")
             build_bank(data_dir, pid, gender, args.clusters, args.frames_per_cluster,
-                       args.sub_clusters, args.min_spk_diversity, args.entropy_top_p,
-                       banks_dir=banks_dir)
+                       args.sub_clusters, args.min_spk_diversity, args.entropy_top_p)
 
 
 if __name__ == "__main__":

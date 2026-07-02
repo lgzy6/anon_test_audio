@@ -11,58 +11,51 @@ from tqdm import tqdm
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Build pseudo bank with label filtering")
+    parser = argparse.ArgumentParser(description="Build pseudo bank")
     parser.add_argument('--data-dir', default="/root/autodl-tmp/anon_test/checkpoints/trainother500_with_phones")
-    parser.add_argument('--entropy', default=None, help="熵文件路径，默认按标签自动命名")
-    parser.add_argument('--output', default=None, help="输出 bank 路径，默认按标签自动命名")
-    parser.add_argument('--gender', default=None, help="按性别过滤 (e.g., m/f/unknown)")
-    parser.add_argument('--emotion', default=None, help="按情绪过滤 (e.g., neutral/happy/unknown)")
-    parser.add_argument('--clusters', type=int, default=50)
+    parser.add_argument('--entropy', default=None)
+    parser.add_argument('--output', default=None)
+    parser.add_argument('--gender', default=None, help="m/f，不传则批量处理男女")
+    parser.add_argument('--clusters', type=int, default=16)
     parser.add_argument('--frames-per-cluster', type=int, default=20)
-    parser.add_argument('--entropy-percentile', type=float, default=60)
+    parser.add_argument('--entropy-percentile', type=float, default=75)
     parser.add_argument('--min-spk-diversity', type=int, default=3)
     parser.add_argument('--chunk-size', type=int, default=1_000_000)
     return parser.parse_args()
 
 
-def pick_entropy_path(data_dir: str, gender: str | None, emotion: str | None, entropy: str | None) -> str:
+def pick_entropy_path(data_dir: str, gender: str | None, entropy: str | None) -> str:
     if entropy:
         return entropy
-    if not gender and not emotion:
+    if not gender:
         return f"{data_dir}/entropies.h5"
-    suffix = []
-    if gender:
-        suffix.append(f"gender-{gender}")
-    if emotion:
-        suffix.append(f"emotion-{emotion}")
-    suffix_str = '.'.join(suffix)
-    return f"{data_dir}/entropies.{suffix_str}.h5"
+    return f"{data_dir}/entropies.gender-{gender}.h5"
 
 
-def pick_output_path(data_dir: str, gender: str | None, emotion: str | None, output: str | None) -> str:
+def pick_output_path(data_dir: str, gender: str | None, output: str | None) -> str:
     if output:
         return output
-    if not gender and not emotion:
+    if not gender:
         return f"{data_dir}/pseudo_bank.pt"
-    suffix = []
-    if gender:
-        suffix.append(f"gender-{gender}")
-    if emotion:
-        suffix.append(f"emotion-{emotion}")
-    suffix_str = '.'.join(suffix)
-    return f"{data_dir}/pseudo_bank.{suffix_str}.pt"
+    return f"{data_dir}/pseudo_bank.gender-{gender}.pt"
 
 
 def main() -> None:
     args = parse_args()
+    genders = ['m', 'f'] if args.gender is None else [args.gender]
+    for gender in genders:
+        args.gender = gender
+        _build_bank(args)
 
+
+def _build_bank(args) -> None:
     data_dir = args.data_dir
     meta_path = f"{data_dir}/metadata.json"
-    entropy_path = pick_entropy_path(data_dir, args.gender, args.emotion, args.entropy)
-    output_bank_path = pick_output_path(data_dir, args.gender, args.emotion, args.output)
+    entropy_path = pick_entropy_path(data_dir, args.gender, args.entropy)
+    output_bank_path = pick_output_path(data_dir, args.gender, args.output)
 
     print("=" * 60)
-    print("开始构建最终伪风格 Bank (顺序读取优化版)...")
+    print(f"开始构建伪风格 Bank - 性别: {args.gender}")
     print("=" * 60)
 
     with open(meta_path, 'r') as f:
@@ -71,8 +64,6 @@ def main() -> None:
 
     def match_labels(utt: dict) -> bool:
         if args.gender and utt.get('gender', 'unknown') != args.gender:
-            return False
-        if args.emotion and utt.get('emotion', 'unknown') != args.emotion:
             return False
         return True
 
@@ -125,77 +116,99 @@ def main() -> None:
         selected_indices = valid_indices[high_entropy_mask]
         global_keep_mask[selected_indices] = True
 
-    # 3. 顺序扫描 HDF5，将高熵帧全部吸入内存
-    print("[3/4] 顺序读取磁盘，将高熵特征装载至内存 (极速 I/O)...")
-    l6_filtered_dict = {ph: [] for ph in unique_phones}
+    # 3. 顺序扫描 HDF5，将高熵帧全部吸入内存 (L6 + L12 + L24)
+    print("[3/4] 顺序读取磁盘，将高熵特征装载至内存 (L6 + L12 + L24)...")
+    l6_filtered_dict  = {ph: [] for ph in unique_phones}
+    l12_filtered_dict = {ph: [] for ph in unique_phones}
+    l24_filtered_dict = {ph: [] for ph in unique_phones}
     spk_filtered_dict = {ph: [] for ph in unique_phones}
 
-    with h5py.File(f"{data_dir}/layer_6.h5", 'r') as h5_l6:
-        ds_l6 = h5_l6['features']
+    with h5py.File(f"{data_dir}/layer_6.h5",  'r') as h5_l6,  \
+         h5py.File(f"{data_dir}/layer_12.h5", 'r') as h5_l12, \
+         h5py.File(f"{data_dir}/layer_24.h5", 'r') as h5_l24:
+        ds_l6  = h5_l6['features']
+        ds_l12 = h5_l12['features']
+        ds_l24 = h5_l24['features']
 
-        for start_idx in tqdm(range(0, total_frames, args.chunk_size), desc="顺序块读取 L6"):
+        for start_idx in tqdm(range(0, total_frames, args.chunk_size), desc="顺序块读取"):
             end_idx = min(start_idx + args.chunk_size, total_frames)
             mask_chunk = global_keep_mask[start_idx:end_idx]
 
             if not np.any(mask_chunk):
                 continue
 
-            l6_chunk = ds_l6[start_idx:end_idx]
-
-            l6_chunk_kept = l6_chunk[mask_chunk]
+            l6_chunk_kept  = ds_l6[start_idx:end_idx][mask_chunk]
+            l12_chunk_kept = ds_l12[start_idx:end_idx][mask_chunk]
+            l24_chunk_kept = ds_l24[start_idx:end_idx][mask_chunk]
             phones_chunk_kept = all_phones[start_idx:end_idx][mask_chunk]
-            spks_chunk_kept = frame_to_spk[start_idx:end_idx][mask_chunk]
+            spks_chunk_kept   = frame_to_spk[start_idx:end_idx][mask_chunk]
 
             for ph in np.unique(phones_chunk_kept):
                 ph_mask = (phones_chunk_kept == ph)
                 l6_filtered_dict[ph].append(l6_chunk_kept[ph_mask])
+                l12_filtered_dict[ph].append(l12_chunk_kept[ph_mask])
+                l24_filtered_dict[ph].append(l24_chunk_kept[ph_mask])
                 spk_filtered_dict[ph].append(spks_chunk_kept[ph_mask])
 
-    # 4. 在内存中逐音素执行 K-Means 二次聚类
-    print("[4/4] 逐音素聚类并构建最终 Bank...")
+    # 4. 在内存中逐音素执行 K-Means 二次聚类 (基于L24)，绑定 L6/L12/L24
+    print("[4/4] 逐音素聚类并构建最终 Bank (L6 + L12 + L24 绑定)...")
     pseudo_bank_tensors = {}
 
     for phone_id in tqdm(unique_phones, desc="Processing Phones"):
         if not l6_filtered_dict[phone_id]:
             continue
 
-        l6_filtered = np.concatenate(l6_filtered_dict[phone_id])
+        l6_filtered  = np.concatenate(l6_filtered_dict[phone_id])
+        l12_filtered = np.concatenate(l12_filtered_dict[phone_id])
+        l24_filtered = np.concatenate(l24_filtered_dict[phone_id])
         spks_filtered = np.concatenate(spk_filtered_dict[phone_id])
 
         if len(l6_filtered) < args.clusters:
-            pseudo_bank_tensors[phone_id] = torch.from_numpy(l6_filtered).float()
+            pseudo_bank_tensors[phone_id] = {
+                'l6':  torch.from_numpy(l6_filtered).float(),
+                'l12': torch.from_numpy(l12_filtered).float(),
+                'l24': torch.from_numpy(l24_filtered).float(),
+            }
             continue
 
         km = MiniBatchKMeans(n_clusters=args.clusters, random_state=42, batch_size=2048)
-        km.fit(l6_filtered)
+        km.fit(l24_filtered)
         labels = km.labels_
 
-        selected_frames = []
+        selected_l6, selected_l12, selected_l24 = [], [], []
         for c in range(args.clusters):
             cluster_mask = labels == c
-            cluster_l6 = l6_filtered[cluster_mask]
             cluster_spks = spks_filtered[cluster_mask]
-
             if len(np.unique(cluster_spks)) < args.min_spk_diversity:
                 continue
 
-            dists = np.linalg.norm(cluster_l6 - km.cluster_centers_[c], axis=1)
+            cluster_l24 = l24_filtered[cluster_mask]
+            dists   = np.linalg.norm(cluster_l24 - km.cluster_centers_[c], axis=1)
             top_idx = dists.argsort()[:args.frames_per_cluster]
-            selected_frames.append(cluster_l6[top_idx])
+            selected_l6.append(l6_filtered[cluster_mask][top_idx])
+            selected_l12.append(l12_filtered[cluster_mask][top_idx])
+            selected_l24.append(cluster_l24[top_idx])
 
-        if selected_frames:
-            final_l6_np = np.concatenate(selected_frames)
+        if selected_l6:
+            final_l6  = np.concatenate(selected_l6)
+            final_l12 = np.concatenate(selected_l12)
+            final_l24 = np.concatenate(selected_l24)
         else:
-            final_l6_np = l6_filtered
+            final_l6, final_l12, final_l24 = l6_filtered, l12_filtered, l24_filtered
 
-        pseudo_bank_tensors[phone_id] = torch.from_numpy(final_l6_np).float()
+        pseudo_bank_tensors[phone_id] = {
+            'l6':  torch.from_numpy(final_l6).float(),
+            'l12': torch.from_numpy(final_l12).float(),
+            'l24': torch.from_numpy(final_l24).float(),
+        }
 
     torch.save(pseudo_bank_tensors, output_bank_path)
 
     print("\n" + "=" * 60)
     print(f"Bank 构建完成并已保存至: {output_bank_path}")
     print(f"涵盖音素数: {len(pseudo_bank_tensors)}")
-    print(f"总帧数: {sum(t.shape[0] for t in pseudo_bank_tensors.values())}")
+    print(f"总帧数 (L6): {sum(t['l6'].shape[0] for t in pseudo_bank_tensors.values())}")
+    print(f"存储格式: {{phone_id: {{'l6': tensor, 'l12': tensor, 'l24': tensor}}}}")
     print("=" * 60)
 
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
-Multi-Pool kNN 匿名化合成 v2:
-  - bank 来自 build_multi_bank_v2（二次聚类质心）
-  - 检索：按音素 top3 质心，随机选1个对应 L6
+Multi-Pool kNN 匿名化合成 v2 消融版:
+  - bank 来自 build_multi_bank_v2_ablation（仅 L6 质心）
+  - 检索：L6 查询 L6，top3 随机选1个
 """
 
 import sys
@@ -16,16 +16,13 @@ from tqdm import tqdm
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 BASE_DIR  = Path(__file__).parent.parent.parent
 CKPT_DIR  = BASE_DIR / 'checkpoints'
-BANKS_DIR = CKPT_DIR / 'banks_v2'
+BANKS_DIR = CKPT_DIR / 'banks_v2_ablation'
 N_POOLS   = 4
 
 
 def _load_bank(path, device):
     bank = torch.load(str(path), map_location=device)
-    fallback = {
-        'l6':  torch.cat([v['l6']  for v in bank.values()], dim=0),
-        'l24': torch.cat([v['l24'] for v in bank.values()], dim=0),
-    }
+    fallback = {'l6': torch.cat([v['l6'] for v in bank.values()], dim=0)}
     return bank, fallback
 
 
@@ -72,7 +69,7 @@ def extract_features(audio_path, models, device):
 
 def anonymize(source, pool_banks, src_gender, mode, device):
     bank, fallback = select_bank(pool_banks, src_gender, mode)
-    query = source['l24'].to(device)
+    query = source['l6'].to(device)
     phones_t = torch.tensor(source['phones'], dtype=torch.long, device=device)
     T = query.shape[0]
     h_anon = torch.zeros(T, 1024, device=device)
@@ -82,36 +79,20 @@ def anonymize(source, pool_banks, src_gender, mode, device):
         mask = phones_t == phone_id
         N_q = mask.sum().item()
 
-        tgt_l24 = bank[ph]['l24'].to(device) if ph in bank else fallback['l24'].to(device)
-        tgt_l6  = bank[ph]['l6'].to(device)  if ph in bank else fallback['l6'].to(device)
+        tgt_l6 = bank[ph]['l6'].to(device) if ph in bank else fallback['l6'].to(device)
 
-        if tgt_l24.shape[0] == 0:
+        if tgt_l6.shape[0] == 0:
             continue
-        if tgt_l24.shape[0] == 1:
+        if tgt_l6.shape[0] == 1:
             h_anon[mask] = tgt_l6[0].expand(N_q, -1)
             continue
 
-        # # top3 随机采样
-        # k = min(3, tgt_l24.shape[0])
-        # top3 = torch.cdist(query[mask], tgt_l24).topk(k, dim=-1, largest=False).indices  # [N_q, k]
-        # rand_col = torch.randint(0, k, (N_q,), device=device)
-        # idx = top3[torch.arange(N_q, device=device), rand_col]
-        # h_anon[mask] = tgt_l6[idx]
-
-
-
-        # 在 synth 中替换随机选1为距离加权平均
-        k = min(3, tgt_l24.shape[0])
-        dists = torch.cdist(query[mask], tgt_l24)
-        topk_dists, topk_idx = dists.topk(k, dim=-1, largest=False)
-
-        # 距离反比加权
-        weights = 1.0 / (topk_dists + 1e-6)
-        weights = weights / weights.sum(dim=-1, keepdim=True)  # [N_q, k]
-
-        topk_l6 = tgt_l6[topk_idx]  # [N_q, k, 1024]
-        h_anon[mask] = (topk_l6 * weights.unsqueeze(-1)).sum(dim=1)
-
+        # L6 查询 L6，top3 随机采样
+        k = min(3, tgt_l6.shape[0])
+        top3 = torch.cdist(query[mask], tgt_l6).topk(k, dim=-1, largest=False).indices
+        rand_col = torch.randint(0, k, (N_q,), device=device)
+        idx = top3[torch.arange(N_q, device=device), rand_col]
+        h_anon[mask] = tgt_l6[idx]
 
     return h_anon.cpu()
 
@@ -119,7 +100,7 @@ def anonymize(source, pool_banks, src_gender, mode, device):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--audio',      default=str('/root/autodl-tmp/Voice-Privacy-Challenge-2024/data/libri_dev/wav/84-121123-0000/84-121123-0000.wav'))
-    parser.add_argument('--output-dir', default=str(BASE_DIR / 'outputs' / 'multipool_v2'))
+    parser.add_argument('--output-dir', default=str(BASE_DIR / 'outputs' / 'multipool_v2_ablation'))
     parser.add_argument('--src-gender', default='m', choices=['m', 'f'])
     parser.add_argument('--mode',       default='all', choices=['same', 'cross', 'all'])
     parser.add_argument('--pool',       default=None, help="指定 pool id，或 'all' 遍历所有池子（默认随机）")

@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
 """
-Bank 构建 v2:
+Bank 构建 v2-medoid:
   L24 K-Means(8簇)，混淆熵用 L24 计算，动态 top-p% 过滤
   每个通过过滤的簇取最近 frames_per_cluster 帧做二次 K-Means(sub_clusters)
-  保存二次聚类质心：L24 质心 + 对应子簇 L6 均值
+  保存二次聚类 medoid：每个子簇中距质心最近的真实帧（L24 + 对应 L6）
 """
 import os
 os.environ["OMP_NUM_THREADS"] = "16"
@@ -19,7 +19,6 @@ from sklearn.cluster import MiniBatchKMeans, KMeans
 from tqdm import tqdm
 
 CKPT_DIR  = Path("/root/autodl-tmp/anon_test/checkpoints")
-# BANKS_DIR 由 main() 根据参数动态生成，格式: banks_c{C}f{F}s{S}_e{E}_d{D}
 BANKS_DIR = None  # 延迟初始化
 
 
@@ -38,12 +37,18 @@ def _cluster_entropy(l24_frames: np.ndarray, spk_ids: np.ndarray, temperature: f
     return float(ent.mean() / np.log(len(unique_spks)))
 
 
+def _find_medoid(frames: np.ndarray, centroid: np.ndarray) -> int:
+    """找到距离质心最近的真实帧索引"""
+    dists = np.linalg.norm(frames - centroid, axis=1)
+    return int(dists.argmin())
+
+
 def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20, sub_clusters=4,
                min_spk_diversity=3, entropy_top_p=0.5, chunk_size=200_000, silence_phones=(0,),
                banks_dir=None):
     data_dir = Path(data_dir)
     if banks_dir is None:
-        banks_dir = CKPT_DIR / "banks_v2"
+        banks_dir = CKPT_DIR / "banks_v2_medoid"
     banks_dir.mkdir(parents=True, exist_ok=True)
     out_path = banks_dir / f"pool_{pool_id}_gender-{gender_tag}.pt"
 
@@ -102,9 +107,12 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
 
         n, k = len(l24_all), min(clusters, len(l24_all))
         if n < k:
+            # 帧数不足: 取距均值最近的真实帧作为 medoid
+            centroid_l24 = l24_all.mean(0)
+            med_idx = _find_medoid(l24_all, centroid_l24)
             bank[ph] = {
-                "l6":  torch.from_numpy(l6_all.mean(0, keepdims=True)).float(),
-                "l24": torch.from_numpy(l24_all.mean(0, keepdims=True)).float(),
+                "l6":  torch.from_numpy(l6_all[med_idx:med_idx+1]).float(),
+                "l24": torch.from_numpy(l24_all[med_idx:med_idx+1]).float(),
             }
             continue
 
@@ -121,7 +129,7 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
             entropies.append(_cluster_entropy(l24_all[cm], spk_all[cm]))
             valid_clusters.append(c)
 
-        centroids_l6, centroids_l24 = [], []
+        medoids_l6, medoids_l24 = [], []
         if valid_clusters:
             threshold = np.percentile(entropies, (1 - entropy_top_p) * 100)
             for c, ent in zip(valid_clusters, entropies):
@@ -137,21 +145,30 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
 
                 k2 = min(sub_clusters, len(cand_l24))
                 if len(cand_l24) <= k2:
-                    centroids_l24.append(cand_l24)
-                    centroids_l6.append(cand_l6)
+                    # 候选帧不足: 直接保留全部真实帧
+                    medoids_l24.append(cand_l24)
+                    medoids_l6.append(cand_l6)
                 else:
                     km2 = KMeans(n_clusters=k2, random_state=42, n_init='auto')
                     km2.fit(cand_l24)
-                    centroids_l24.append(km2.cluster_centers_.astype(np.float32))
-                    centroids_l6.append(np.stack([
-                        cand_l6[km2.labels_ == sc].mean(0)
-                        for sc in range(k2) if np.any(km2.labels_ == sc)
-                    ]))
+                    # 每个子簇取距质心最近的真实帧 (medoid)
+                    sub_l24, sub_l6 = [], []
+                    for sc in range(k2):
+                        sc_mask = km2.labels_ == sc
+                        if not np.any(sc_mask):
+                            continue
+                        sc_l24 = cand_l24[sc_mask]
+                        sc_l6  = cand_l6[sc_mask]
+                        med_idx = _find_medoid(sc_l24, km2.cluster_centers_[sc])
+                        sub_l24.append(sc_l24[med_idx:med_idx+1])
+                        sub_l6.append(sc_l6[med_idx:med_idx+1])
+                    medoids_l24.append(np.concatenate(sub_l24))
+                    medoids_l6.append(np.concatenate(sub_l6))
 
-        if centroids_l24:
+        if medoids_l24:
             bank[ph] = {
-                "l6":  torch.from_numpy(np.concatenate(centroids_l6)).float(),
-                "l24": torch.from_numpy(np.concatenate(centroids_l24)).float(),
+                "l6":  torch.from_numpy(np.concatenate(medoids_l6)).float(),
+                "l24": torch.from_numpy(np.concatenate(medoids_l24)).float(),
             }
         del l6_all, l24_all, spk_all
 
@@ -160,27 +177,26 @@ def build_bank(data_dir, pool_id, gender_tag, clusters=8, frames_per_cluster=20,
 
     torch.save(bank, out_path)
     total_f = sum(v["l6"].shape[0] for v in bank.values())
-    print(f"  Bank 完成: {out_path.relative_to(CKPT_DIR)} | 音素:{len(bank)}, 质心总数:{total_f}")
+    print(f"  Bank 完成: {out_path.relative_to(CKPT_DIR)} | 音素:{len(bank)}, medoid总数:{total_f}")
 
 
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--pool", type=int, default=None)
     parser.add_argument("--clusters", "-c", type=int, default=8)
-    parser.add_argument("--frames-per-cluster", "-f", type=int, default=20)
+    parser.add_argument("--frames-per-cluster", "-f", type=int, default=16)
     parser.add_argument("--sub-clusters", "-s", type=int, default=4)
     parser.add_argument("--min-spk-diversity", "-d", type=int, default=3)
-    parser.add_argument("--entropy-top-p", "-e", type=float, default=0.5)
+    parser.add_argument("--entropy-top-p", "-e", type=float, default=1.0)
     parser.add_argument("--bank-dir", type=str, default=None,
-                        help="自定义输出目录名(相对checkpoints), 默认自动生成: banks_c{C}f{F}s{S}_e{E}_d{D}")
+                        help="自定义输出目录名(相对checkpoints), 默认自动生成: banks_c{C}f{F}s{S}_e{E}_d{D}_medoid")
     args = parser.parse_args()
 
-    # 自动生成 bank 目录名: banks_c{C}f{F}s{S}_e{E}_d{D}
     if args.bank_dir:
         banks_dir = CKPT_DIR / args.bank_dir
     else:
         e_str = f"{args.entropy_top_p:.1f}".replace(".", "")
-        dir_name = f"banks_c{args.clusters}f{args.frames_per_cluster}s{args.sub_clusters}_e{e_str}_d{args.min_spk_diversity}"
+        dir_name = f"banks_c{args.clusters}f{args.frames_per_cluster}s{args.sub_clusters}_e{e_str}_d{args.min_spk_diversity}_medoid"
         banks_dir = CKPT_DIR / dir_name
 
     print(f"Bank 输出目录: {banks_dir}")

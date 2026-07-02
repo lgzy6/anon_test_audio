@@ -23,12 +23,10 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 from models.ssl.wrappers import WavLMSSLExtractor
 from models.phone_predictor.predictor import PhonePredictor
 from data.datasets.librispeech import LibriSpeechDataset
-from data.datasets.esd import ESDDataset
 
 # ==================== 配置 ====================
 LIBRISPEECH_ROOT = "/root/autodl-tmp/datasets/LibriTTS"
 LIBRISPEECH_SPLIT = "train-other-500"
-ESD_ROOT = "/root/autodl-tmp/datasets/Emotion Speech Dataset"
 
 WAVLM_CKPT = "/root/autodl-tmp/anon_test/checkpoints/WavLM-Large.pt"
 PHONE_CKPT = "/root/autodl-tmp/anon_test/checkpoints/phone_decoder.pt"
@@ -43,7 +41,7 @@ UTT_RATIO = 1.0     # 每个说话人保留的 utterance 比例（1.0=全量保�
 # 模型配置
 DEVICE = "cuda"
 BATCH_SIZE = 1  # 设为1避免batch padding导致的自注意力污染
-LAYERS = [6, 24]  # 提取的层
+LAYERS = [6, 12, 24]  # 提取的层
 
 print("=" * 70)
 print("重构版特征提取 (200 说话人: 男女各100)")
